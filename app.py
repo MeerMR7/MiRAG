@@ -1,103 +1,162 @@
-import os
 import streamlit as st
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from groq import Groq
-from dotenv import load_dotenv
+import pdfplumber
+import requests
+import datetime
 
-# === 1. MiRAG Configuration & Paths ===
-st.set_page_config(page_title="MiRAG | Personal Assistant", page_icon="🤖", layout="wide")
-load_dotenv()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# -------------------- BASIC SETUP --------------------
+st.set_page_config(page_title="Z&J ka Chatbot", layout="centered")
 
-# Define permanent paths for persistence
-DATA_PATH = "mirag_data"      # Directory for uploaded PDFs
-DB_PATH = "mirag_vector_db"   # Directory for the FAISS index
-os.makedirs(DATA_PATH, exist_ok=True)
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+PDF_PATH = "data/Zeeshan_Chatbot_Company_Manual.pdf"
+MODEL_NAME = "llama-3.1-8b-instant"
 
-st.markdown("<h2 style='text-align: center;'>🤖 MiRAG: My Intelligent RAG</h2>", unsafe_allow_html=True)
-st.divider()
 
-# === 2. Document Processing with Persistence Path ===
-@st.cache_resource(show_spinner="🧠 Initializing MiRAG Brain...")
-def prepare_vectorstore(uploaded_file):
-    # Create a unique path for the uploaded document
-    file_path = os.path.join(DATA_PATH, uploaded_file.name)
-    
-    with open(file_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    
-    # Load and Split
-    loader = PyPDFLoader(file_path)
-    pages = loader.load()
-    splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)
-    chunks = splitter.split_documents(pages)
-    
-    # Embeddings Path Logic
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    
-    # Check if a persistent path exists to avoid re-embedding
-    if os.path.exists(DB_PATH):
-        vectorstore = FAISS.load_local(DB_PATH, embeddings, allow_dangerous_deserialization=True)
-        # Merge new data if it's a new file
-        new_db = FAISS.from_documents(chunks, embeddings)
-        vectorstore.merge_from(new_db)
+# -------------------- LOAD + CHUNK PDF --------------------
+@st.cache_data
+def load_chunks(max_chars: int = 600):
+    text = ""
+    with pdfplumber.open(PDF_PATH) as pdf:
+        for page in pdf.pages:
+            tx = page.extract_text()
+            if tx:
+                text += tx + "\n"
+
+    raw_parts = [p.strip() for p in text.split("\n") if p.strip()]
+    chunks = []
+    buf = ""
+
+    for part in raw_parts:
+        if len(buf) + len(part) <= max_chars:
+            buf += " " + part
+        else:
+            chunks.append(buf.strip())
+            buf = part
+
+    if buf:
+        chunks.append(buf.strip())
+
+    return chunks
+
+
+pdf_chunks = load_chunks()
+
+
+# -------------------- SIMPLE RETRIEVAL --------------------
+def retrieve_context(query: str, top_k: int = 3):
+    q_words = set(query.lower().split())
+    scored = []
+
+    for ch in pdf_chunks:
+        ch_words = set(ch.lower().split())
+        score = len(q_words & ch_words)
+        if score > 0:
+            scored.append((score, ch))
+
+    if not scored:
+        return ""
+
+    scored.sort(reverse=True, key=lambda x: x[0])
+    return "\n\n".join([c for _, c in scored[:top_k]])
+
+
+# -------------------- GROQ API CALL --------------------
+def llama_chat(messages):
+    url = "https://api.groq.com/openai/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": MODEL_NAME,
+        "messages": messages,
+        "temperature": 0.4,
+    }
+
+    response = requests.post(url, json=payload, headers=headers)
+    result = response.json()
+
+    try:
+        return result["choices"][0]["message"]["content"]
+    except:
+        return "⚠️ Groq API Error:\n" + str(result)
+
+
+# -------------------- RAG + UPDATED INFO (NO SEARCHING TEXT) --------------------
+def get_answer(question: str, history):
+    context = retrieve_context(question)
+    today = datetime.datetime.now().strftime("%d %B %Y (%Y)")
+    pdf_strength = len(context.strip())
+
+    if pdf_strength < 50:
+        # PDF does not contain relevant information → use AI updated knowledge
+        system_prompt = f"""
+You are Z&J ka Chatbot.
+
+Rules:
+- Give clear and direct answers.
+- Use your updated general knowledge (today = {today}).
+- Do NOT say anything about "searching", "checking", "researching", or "not knowing".
+- Never restrict information to the year 2023.
+"""
     else:
-        vectorstore = FAISS.from_documents(chunks, embeddings)
+        # PDF has useful context → use it first, but allow updated info too
+        system_prompt = f"""
+You are Z&J ka Chatbot.
+
+Use the following PDF text as your main reference. 
+If updated information (today = {today}) is needed, include it naturally.
+
+PDF Context:
+---------------------
+{context}
+---------------------
+
+Rules:
+- Provide confident and direct answers.
+- Do NOT say "I am searching" or "I am researching".
+- Never limit your knowledge to only 2023.
+"""
+
+    # Build message list
+    messages = [{"role": "system", "content": system_prompt}]
     
-    # Save the updated "brain" to the persistent path
-    vectorstore.save_local(DB_PATH)
-    return vectorstore
+    for m in history[-6:]:
+        messages.append(m)
 
-# Sidebar for Dynamic Uploads
-with st.sidebar:
-    st.header("📁 Personal Data")
-    uploaded_file = st.file_uploader("Upload a PDF to MiRAG", type="pdf")
-    
-    if st.button("Clear History & DB"):
-        st.session_state.messages = []
-        # Clear the physical paths
-        if os.path.exists(DB_PATH):
-            import shutil
-            shutil.rmtree(DB_PATH)
-        st.rerun()
+    messages.append({"role": "user", "content": question})
 
-# === 3. Chat Logic ===
-if uploaded_file:
-    vectorstore = prepare_vectorstore(uploaded_file)
-    
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+    return llama_chat(messages)
 
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
 
-    if query := st.chat_input("Ask MiRAG something..."):
-        st.session_state.messages.append({"role": "user", "content": query})
-        with st.chat_message("user"):
-            st.markdown(query)
+# -------------------- STREAMLIT UI --------------------
+st.title("🤖 Z&J ka Chatbot")
 
-        # Retrieval & Generation
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
-        docs = retriever.invoke(query)  # Modern LangChain 'invoke' path
-        context = "\n\n".join([doc.page_content for doc in docs])
-        
-        client = Groq(api_key=GROQ_API_KEY)
-        response = client.chat.completions.create(
-            model="llama3-70b-8192",
-            messages=[
-                {"role": "system", "content": "You are MiRAG, a precise assistant. Use the context to answer."},
-                {"role": "user", "content": f"Context: {context}\n\nQuestion: {query}"}
-            ],
-            temperature=0.2
-        )
-        
-        answer = response.choices[0].message.content
-        with st.chat_message("assistant"):
-            st.markdown(answer)
-        st.session_state.messages.append({"role": "assistant", "content": answer})
-else:
-    st.info("👋 Welcome! Upload a PDF (like the Iqra Academic Policy) to begin.")
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assistant",
+         "content": "Assalam o Alaikum! 👋 Main Z&J ka Chatbot hoon. "
+                    "Jo Bhi Phouchna Bindaas Phoucho Mai Ho Na Apki Madad Kay Liye"}
+    ]
+
+# Display chat messages
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# User input
+user_input = st.chat_input("Apna sawal likho...")
+
+if user_input:
+    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Soch raha hoon..."):
+            answer = get_answer(user_input, st.session_state.messages)
+        st.markdown(answer)
+
+    st.session_state.messages.append({"role": "assistant", "content": answer})
