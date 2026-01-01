@@ -86,7 +86,7 @@ PDF Context:
 
 # -------------------- 5. USER INTERFACE --------------------
 st.title("🤖 MiRAG")
-st.subheader("Mir MUHAMMAD Rafique's Chat Bot")
+st.subheader("Mir MUHAMMAD Rafique & Hasnain Ali Raza's Chat Bot")
 
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": "Assalam o Alaikum! I am MiRAG. I have indexed your Academic Policy. How can I assist you?"}]
