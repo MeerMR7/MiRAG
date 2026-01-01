@@ -57,7 +57,7 @@ def mirag_chat(question: str, history):
     
     # Updated 2025 Intelligence (Grading/Attendance updates)
     system_prompt = f"""
-You are MiRAG (Mir MUHAMMAD Rafique's Chat Bot), a professional Academic Policy Assistant.
+You are MiRAG (Mir MUHAMMAD Rafique And Hasnain Ali Raza's Chat Bot), a professional Academic Policy Assistant.
 Current Date: {today}.
 
 CORE INSTRUCTIONS:
