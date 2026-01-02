@@ -8,7 +8,7 @@ from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 
-# --- BRANDING & UI ---
+#UI
 st.set_page_config(page_title="MiRAG | PDF Chat", page_icon="🔮")
 
 st.markdown("""
@@ -21,7 +21,7 @@ st.title("🔮 MiRAG")
 st.markdown("<div class='developer-tag'>Developed By HasMir</div>", unsafe_allow_html=True)
 st.markdown("---")
 
-# --- SIDEBAR: PDF MANAGEMENT ---
+#SIDEBAR
 with st.sidebar:
     st.header("Settings")
     api_key = st.text_input("Enter OpenAI API Key", type="password")
@@ -33,7 +33,7 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-# --- RAG ENGINE ---
+#RAG ENGINE
 def create_knowledge_base(pdfs, key):
     all_docs = []
     for pdf in pdfs:
@@ -53,7 +53,7 @@ def create_knowledge_base(pdfs, key):
     vectorstore = FAISS.from_documents(final_chunks, embeddings)
     return vectorstore.as_retriever()
 
-# --- CHAT LOGIC ---
+#CHAT LOGIC
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
