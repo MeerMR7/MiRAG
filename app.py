@@ -14,7 +14,7 @@ else:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # Exact filename of your policy document
-PDF_FILENAME = "Academic-Policy-Manual-for-Students2.pdf"
+PDF_PATH = "Academic-Policy-Manual-for-Students2.pdf"
 MODEL_NAME = "llama-3.1-8b-instant"
 
 # -------------------- 2. POLICY DATA RETRIEVAL --------------------
