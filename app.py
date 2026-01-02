@@ -4,7 +4,7 @@ import pdfplumber
 import requests
 import datetime
 
-# -------------------- 1. BRANDING & CONFIG --------------------
+# -------------------- BASIC SETUP --------------------
 st.set_page_config(page_title="MiRAG | Academic Assistant", layout="centered", page_icon="🎓")
 
 # API Key Handling
@@ -13,116 +13,148 @@ if "GROQ_API_KEY" in st.secrets:
 else:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Exact filename of your policy document
-PDF_FILENAME = "Academic-Policy-Manual-for-Students2.pdf"
+# --- UPDATED PATH ---
+# Ensure this file is in your main container/folder
+PDF_PATH = "Academic-Policy-Manual-for-Students2.pdf" 
 MODEL_NAME = "llama-3.1-8b-instant"
 
-# -------------------- 2. POLICY DATA RETRIEVAL --------------------
-@st.cache_data(show_spinner="MiRAG is indexing the Policy Manual...")
-def load_policy_manual():
-    """Reads the PDF and creates searchable data chunks."""
-    if not os.path.exists(PDF_FILENAME):
+# -------------------- LOAD + CHUNK PDF --------------------
+@st.cache_data(show_spinner="Indexing Academic Policy Manual...")
+def load_chunks(max_chars: int = 700):
+    if not os.path.exists(PDF_PATH):
         return None
     
-    all_text = ""
+    text = ""
     try:
-        with pdfplumber.open(PDF_FILENAME) as pdf:
+        with pdfplumber.open(PDF_PATH) as pdf:
             for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    all_text += page_text + "\n"
-        
-        # Break manual into sections for easier searching
-        lines = [line.strip() for line in all_text.split("\n") if line.strip()]
-        chunks, current_chunk = [], ""
-        for line in lines:
-            if len(current_chunk) + len(line) < 700:
-                current_chunk += " " + line
+                tx = page.extract_text()
+                if tx:
+                    text += tx + "\n"
+
+        # Break text into sections for the AI to read easily
+        raw_parts = [p.strip() for p in text.split("\n") if p.strip()]
+        chunks = []
+        buf = ""
+
+        for part in raw_parts:
+            if len(buf) + len(part) <= max_chars:
+                buf += " " + part
             else:
-                chunks.append(current_chunk.strip())
-                current_chunk = line
-        if current_chunk:
-            chunks.append(current_chunk.strip())
+                chunks.append(buf.strip())
+                buf = part
+
+        if buf:
+            chunks.append(buf.strip())
         return chunks
     except Exception as e:
-        st.sidebar.error(f"Error reading PDF: {e}")
+        st.error(f"Error loading PDF: {e}")
         return None
 
-# Load the data
-policy_data = load_policy_manual()
+pdf_chunks = load_chunks()
 
-def get_relevant_policy(query):
-    """Finds the most relevant sections of the manual for a user question."""
-    if not policy_data:
+# -------------------- SIMPLE RETRIEVAL --------------------
+def retrieve_context(query: str, top_k: int = 3):
+    if not pdf_chunks:
         return ""
     
-    query_words = set(query.lower().split())
-    scored_chunks = []
-    for chunk in policy_data:
-        score = len(query_words & set(chunk.lower().split()))
-        scored_chunks.append((score, chunk))
-    
-    # Sort and return the best matches
-    scored_chunks.sort(key=lambda x: x[0], reverse=True)
-    top_context = [c[1] for c in scored_chunks[:3] if c[0] > 0]
-    return "\n\n".join(top_context)
+    q_words = set(query.lower().split())
+    scored = []
 
-# -------------------- 3. CHAT INTELLIGENCE --------------------
-def mirag_chat(question, history):
-    # Retrieve data from the PDF based on the question
-    context = get_relevant_policy(question)
-    today = datetime.datetime.now().strftime("%d %B %Y")
-    
-    system_prompt = f"""
-    You are MiRAG, an Academic Assistant for Iqra University students. 
-    Created by: Mir MUHAMMAD Rafique and Hasnain Ali Raza.
-    Date: {today}.
-    
-    INSTRUCTIONS: Use the POLICY CONTEXT below to answer the student's question. 
-    If the context doesn't have the answer, politely explain that you only have 
-    access to the student policy manual.
+    for ch in pdf_chunks:
+        ch_words = set(ch.lower().split())
+        score = len(q_words & ch_words)
+        if score > 0:
+            scored.append((score, ch))
 
-    POLICY CONTEXT:
-    {context}
-    """
+    if not scored:
+        return ""
 
-    messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": question}]
+    scored.sort(reverse=True, key=lambda x: x[0])
+    return "\n\n".join([c for _, c in scored[:top_k]])
+
+# -------------------- GROQ API CALL --------------------
+def llama_chat(messages):
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": MODEL_NAME,
+        "messages": messages,
+        "temperature": 0.2, # Lower temperature for factual accuracy
+    }
 
     try:
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions", 
-            json={"model": MODEL_NAME, "messages": messages, "temperature": 0.2},
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}"}
-        )
+        response = requests.post(url, json=payload, headers=headers)
         return response.json()["choices"][0]["message"]["content"]
-    except:
-        return "⚠️ Connection Error. Please verify your Groq API Key."
+    except Exception as e:
+        return f"⚠️ Groq API Error: {str(e)}"
 
-# -------------------- 4. USER INTERFACE --------------------
-st.title("🤖 MiRAG: Academic Assistant")
+# -------------------- RAG LOGIC --------------------
+def get_answer(question: str, history):
+    context = retrieve_context(question)
+    today = datetime.datetime.now().strftime("%d %B %Y")
+    
+    # Custom system prompt for your specific manual
+    system_prompt = f"""
+You are MiRAG, an Academic Assistant for Iqra University.
+Created by: Mir MUHAMMAD Rafique and Hasnain Ali Raza.
+
+Use the provided PDF context to answer university-related questions accurately.
+If the information is not in the manual, answer based on general academic standards but mention it's general info.
+
+Current Date: {today}
+
+ACADEMIC POLICY CONTEXT:
+---------------------
+{context}
+---------------------
+
+Rules:
+- Be professional and helpful.
+- For grading, attendance, or admissions, prioritize the PDF context.
+"""
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for m in history[-6:]:
+        messages.append(m)
+    messages.append({"role": "user", "content": question})
+
+    return llama_chat(messages)
+
+# -------------------- STREAMLIT UI --------------------
+st.title("🎓 MiRAG: Academic Assistant")
 st.subheader("Developed by Mir MUHAMMAD Rafique & Hasnain Ali Raza")
 
+# Status Check in Sidebar
 with st.sidebar:
-    st.header("System Status")
-    if policy_data:
-        st.success(f"✅ {PDF_FILENAME} Active")
+    if pdf_chunks:
+        st.success(f"✅ Manual Loaded: {len(pdf_chunks)} sections found.")
     else:
         st.error("❌ Policy Manual Not Found")
-        st.info(f"Please ensure '{PDF_FILENAME}' is in your GitHub folder.")
+        st.info(f"Make sure '{PDF_PATH}' is in the main project folder.")
 
-# Chat History
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "Assalam o Alaikum! I am MiRAG. I have loaded the Academic Policy Manual. How can I help you today?"}]
+    st.session_state.messages = [
+        {"role": "assistant",
+         "content": "Assalam o Alaikum! I am MiRAG. I can help you with grading, admissions, and attendance rules from the Policy Manual."}
+    ]
 
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]): st.markdown(msg["content"])
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-if user_input := st.chat_input("Ask a policy question..."):
+user_input = st.chat_input("Ask about university policies...")
+
+if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
-    with st.chat_message("user"): st.markdown(user_input)
-    
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
     with st.chat_message("assistant"):
-        with st.spinner("Analyzing manual..."):
-            ans = mirag_chat(user_input, st.session_state.messages[:-1])
-            st.markdown(ans)
-            st.session_state.messages.append({"role": "assistant", "content": ans})
+        with st.spinner("Consulting Policy Manual..."):
+            answer = get_answer(user_input, st.session_state.messages)
+        st.markdown(answer)
+        st.session_state.messages.append({"role": "assistant", "content": answer})
