@@ -1,19 +1,27 @@
+import os
 import streamlit as st
 import pdfplumber
 import requests
 import datetime
 
-# -------------------- BASIC SETUP --------------------
-st.set_page_config(page_title="HasMir's ChatBot", layout="centered")
+# -------------------- 1. IDENTITY & CONFIG --------------------
+st.set_page_config(page_title="HasMir | Academic Assistant", layout="centered", page_icon="🤖")
 
+# Securely fetch API Key from Streamlit Secrets
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-PDF_PATH = "data/Zeeshan_Chatbot_Company_Manual.pdf"
+
+# --- GITHUB CONNECTED PATH ---
+# Looks for the file in the same main folder on GitHub
+PDF_PATH = "Academic-Policy-Manual-for-Students2.pdf"
 MODEL_NAME = "llama-3.1-8b-instant"
 
 
-# -------------------- LOAD + CHUNK PDF --------------------
-@st.cache_data
-def load_chunks(max_chars: int = 600):
+# -------------------- 2. LOAD + CHUNK PDF --------------------
+@st.cache_data(show_spinner="HasMir is reading the Policy Manual...")
+def load_chunks(max_chars: int = 700):
+    if not os.path.exists(PDF_PATH):
+        return None
+        
     text = ""
     with pdfplumber.open(PDF_PATH) as pdf:
         for page in pdf.pages:
@@ -37,12 +45,14 @@ def load_chunks(max_chars: int = 600):
 
     return chunks
 
-
 pdf_chunks = load_chunks()
 
 
-# -------------------- SIMPLE RETRIEVAL --------------------
+# -------------------- 3. RETRIEVAL LOGIC --------------------
 def retrieve_context(query: str, top_k: int = 3):
+    if not pdf_chunks:
+        return ""
+        
     q_words = set(query.lower().split())
     scored = []
 
@@ -59,19 +69,17 @@ def retrieve_context(query: str, top_k: int = 3):
     return "\n\n".join([c for _, c in scored[:top_k]])
 
 
-# -------------------- GROQ API CALL --------------------
+# -------------------- 4. GROQ API CALL --------------------
 def llama_chat(messages):
     url = "https://api.groq.com/openai/v1/chat/completions"
-
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
     }
-
     payload = {
         "model": MODEL_NAME,
         "messages": messages,
-        "temperature": 0.4,
+        "temperature": 0.2, # Lower temperature for better factual accuracy
     }
 
     response = requests.post(url, json=payload, headers=headers)
@@ -80,64 +88,56 @@ def llama_chat(messages):
     try:
         return result["choices"][0]["message"]["content"]
     except:
-        return "⚠️ Groq API Error:\n" + str(result)
+        return "⚠️ Error connecting to HasMir's brain. Please check the API Key."
 
 
-# -------------------- RAG + UPDATED INFO (NO SEARCHING TEXT) --------------------
+# -------------------- 5. BRAIN (RAG LOGIC) --------------------
 def get_answer(question: str, history):
     context = retrieve_context(question)
-    today = datetime.datetime.now().strftime("%d %B %Y (%Y)")
-    pdf_strength = len(context.strip())
-
-    if pdf_strength < 50:
-        # PDF does not contain relevant information → use AI updated knowledge
-        system_prompt = f"""
-You are HasMir.
+    today = datetime.datetime.now().strftime("%d %B %Y")
+    
+    # System Prompt with Developer Credits
+    system_prompt = f"""
+You are HasMir, a professional Academic AI Assistant.
+Developed by: Mir MUHAMMAD and Hasnain Ali Raza.
 
 Rules:
-- Give clear and direct answers.
-- Use your updated general knowledge (today = {today}).
-- Do NOT say anything about "searching", "checking", "researching", or "not knowing".
-- Never restrict information to the year 2023.
-"""
-    else:
-        # PDF has useful context → use it first, but allow updated info too
-        system_prompt = f"""
-You are Z&J ka Chatbot.
-
-Use the following PDF text as your main reference. 
-If updated information (today = {today}) is needed, include it naturally.
+- Provide clear, direct, and helpful answers in English.
+- Use the PDF Context below as your main source for academic rules.
+- If information isn't in the PDF, use your general knowledge (Current Date: {today}).
+- Do NOT say "I am searching" or "I am looking at the PDF". Just answer.
 
 PDF Context:
 ---------------------
 {context}
 ---------------------
-
-Rules:
-- Provide confident and direct answers.
-- Do NOT say "I am searching" or "I am researching".
-- Never limit your knowledge to only 2023.
 """
 
-    # Build message list
     messages = [{"role": "system", "content": system_prompt}]
-    
     for m in history[-6:]:
         messages.append(m)
-
     messages.append({"role": "user", "content": question})
 
     return llama_chat(messages)
 
 
-# -------------------- STREAMLIT UI --------------------
+# -------------------- 6. STREAMLIT UI --------------------
 st.title("🤖 HasMir's ChatBot")
+st.caption("Official Academic Assistant | Developed by Mir MUHAMMAD & Hasnain Ali Raza")
+
+# Sidebar Status
+with st.sidebar:
+    st.header("System Status")
+    if pdf_chunks:
+        st.success(f"✅ Linked to Policy Manual")
+    else:
+        st.error("❌ PDF Manual Not Found")
+        st.info("Check if 'Academic-Policy-Manual-for-Students2.pdf' is in the GitHub folder.")
 
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assistant",
-         "content": "Assalam o Alaikum! 👋 I Am HasMir. "
-                    "Ask Me About Academic Policies"}
+         "content": "Hello! I am HasMir. I have been developed by Mir MUHAMMAD and Hasnain Ali Raza to assist you with academic policies. How can I help you today?"}
     ]
 
 # Display chat messages
@@ -146,7 +146,7 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 # User input
-user_input = st.chat_input("Apna sawal likho...")
+user_input = st.chat_input("Ask me about grading, attendance, or admissions...")
 
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
@@ -155,8 +155,8 @@ if user_input:
         st.markdown(user_input)
 
     with st.chat_message("assistant"):
-        with st.spinner("Soch raha hoon..."):
-            answer = get_answer(user_input, st.session_state.messages)
+        with st.spinner("HasMir is thinking..."):
+            answer = get_answer(user_input, st.session_state.messages[:-1])
         st.markdown(answer)
 
     st.session_state.messages.append({"role": "assistant", "content": answer})
