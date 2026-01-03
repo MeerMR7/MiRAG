@@ -8,81 +8,53 @@ from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 
-# UI
+# ---------------- UI ----------------
 st.set_page_config(
-    page_title="Sufiyan’s ChatBot | PDF Chat",
+    page_title="Sufiyan’s ChatBot | Academic Policy",
     page_icon="🤖"
 )
 
-st.markdown("""
-    <style>
-    .developer-tag {
-        text-align: right;
-        color: #6c757d;
-        font-size: 14px;
-        margin-top: -20px;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
 st.title("🤖 Sufiyan’s ChatBot")
-st.markdown(
-    "<div class='developer-tag'>Developed by Sufiyan</div>",
-    unsafe_allow_html=True
-)
+st.caption("Academic Policy Manual Assistant")
 st.markdown("---")
 
-# SIDEBAR
+# Sidebar
 with st.sidebar:
     st.header("Settings")
     api_key = st.text_input("Enter OpenAI API Key", type="password")
 
-    st.subheader("Your Documents")
-    uploaded_pdfs = st.file_uploader(
-        "Upload PDF files",
-        type="pdf",
-        accept_multiple_files=True
-    )
+# ---------------- RAG ENGINE ----------------
+PDF_PATH = "Academic-Policy-Manual-for-Students2.pdf"
 
-    if st.button("Clear Chat"):
-        st.session_state.messages = []
-        st.rerun()
+@st.cache_resource
+def create_knowledge_base(pdf_path, key):
+    loader = PyPDFLoader(pdf_path)
+    docs = loader.load()
 
-# RAG ENGINE
-def create_knowledge_base(pdfs, key):
-    all_docs = []
-
-    for pdf in pdfs:
-        with open("temp.pdf", "wb") as f:
-            f.write(pdf.getbuffer())
-
-        loader = PyPDFLoader("temp.pdf")
-        all_docs.extend(loader.load())
-        os.remove("temp.pdf")
-
-    text_splitter = RecursiveCharacterTextSplitter(
+    splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=100
     )
-    final_chunks = text_splitter.split_documents(all_docs)
+    chunks = splitter.split_documents(docs)
 
     embeddings = OpenAIEmbeddings(openai_api_key=key)
-    vectorstore = FAISS.from_documents(final_chunks, embeddings)
+    vectorstore = FAISS.from_documents(chunks, embeddings)
 
     return vectorstore.as_retriever()
 
-# CHAT LOGIC
+# ---------------- CHAT MEMORY ----------------
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display chat history
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-# User Input
-if prompt := st.chat_input("Ask a question about your PDFs"):
+# ---------------- CHAT INPUT ----------------
+if prompt := st.chat_input("Ask about academic policies"):
     if not api_key:
-        st.error("Please provide an API Key in the sidebar.")
+        st.error("Please enter your OpenAI API key.")
+    elif not os.path.exists(PDF_PATH):
+        st.error("Academic-Policy-Manual-for-Students2.pdf not found.")
     else:
         st.session_state.messages.append(
             {"role": "user", "content": prompt}
@@ -90,47 +62,37 @@ if prompt := st.chat_input("Ask a question about your PDFs"):
         st.chat_message("user").write(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Sufiyan’s ChatBot is scanning documents..."):
-                try:
-                    llm = ChatOpenAI(
-                        model="gpt-4o-mini",
-                        openai_api_key=api_key
-                    )
+            with st.spinner("Reading Academic Policy Manual..."):
+                llm = ChatOpenAI(
+                    model="gpt-4o-mini",
+                    openai_api_key=api_key
+                )
 
-                    if uploaded_pdfs:
-                        retriever = create_knowledge_base(
-                            uploaded_pdfs, api_key
-                        )
+                retriever = create_knowledge_base(PDF_PATH, api_key)
 
-                        system_prompt = (
-                            "You are Sufiyan’s ChatBot, a precise document assistant. "
-                            "Use the provided context to answer the question. "
-                            "If the answer is not found in the documents, "
-                            "clearly say you do not know.\n\n{context}"
-                        )
+                system_prompt = (
+                    "You are Sufiyan’s ChatBot, an academic policy assistant. "
+                    "Answer ONLY using the Academic Policy Manual provided. "
+                    "If the answer is not found, say you don't know.\n\n{context}"
+                )
 
-                        prompt_template = ChatPromptTemplate.from_messages([
-                            ("system", system_prompt),
-                            ("human", "{input}")
-                        ])
+                prompt_template = ChatPromptTemplate.from_messages([
+                    ("system", system_prompt),
+                    ("human", "{input}")
+                ])
 
-                        combine_docs_chain = create_stuff_documents_chain(
-                            llm, prompt_template
-                        )
+                combine_chain = create_stuff_documents_chain(
+                    llm, prompt_template
+                )
 
-                        rag_chain = create_retrieval_chain(
-                            retriever, combine_docs_chain
-                        )
+                rag_chain = create_retrieval_chain(
+                    retriever, combine_chain
+                )
 
-                        response = rag_chain.invoke({"input": prompt})
-                        full_res = response["answer"]
-                    else:
-                        full_res = llm.invoke(prompt).content
+                response = rag_chain.invoke({"input": prompt})
+                answer = response["answer"]
 
-                    st.write(full_res)
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": full_res}
-                    )
-
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                st.write(answer)
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": answer}
+                )
