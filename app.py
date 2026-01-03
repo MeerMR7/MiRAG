@@ -1,104 +1,105 @@
-import streamlit as st
 import os
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import FAISS
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
+import streamlit as st
+import pdfplumber
+import requests
+import datetime
 
-# --- BRANDING & UI ---
-st.set_page_config(page_title="MiRAG | PDF Chat", page_icon="🔮")
+# -------------------- 1. BRANDING & CONFIG --------------------
+st.set_page_config(page_title="MiRAG | Academic Assistant", layout="centered", page_icon="🤖")
 
-st.markdown("""
-    <style>
-    .developer-tag { text-align: right; color: #6c757d; font-size: 14px; margin-top: -20px; }
-    </style>
-    """, unsafe_allow_html=True)
+if "GROQ_API_KEY" in st.secrets:
+    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+else:
+    st.error("⚠️ GROQ_API_KEY missing in Secrets!")
+    st.stop()
 
-st.title("🔮 MiRAG")
-st.markdown("<div class='developer-tag'>Developed By HasMir</div>", unsafe_allow_html=True)
-st.markdown("---")
+# AUTO-FILE PATH
+PDF_PATH = "Academic-Policy-Manual-for-Students2.pdf" 
+MODEL_NAME = "llama-3.1-8b-instant"
 
-# --- SIDEBAR: PDF MANAGEMENT ---
-with st.sidebar:
-    st.header("Settings")
-    api_key = st.text_input("Enter OpenAI API Key", type="password")
+# -------------------- 2. AUTO-LOAD POLICY --------------------
+@st.cache_data(show_spinner="MiRAG is syncing with the Policy Manual...")
+def load_mirag_brain(path: str):
+    if not os.path.exists(path):
+        return []
     
-    st.subheader("Your Documents")
-    uploaded_pdfs = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
+    text = ""
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            tx = page.extract_text()
+            if tx: text += tx + "\n"
+
+    # Precise chunking for better retrieval
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    chunks, buf = [], ""
+    for line in lines:
+        if len(buf) + len(line) <= 600:
+            buf += " " + line
+        else:
+            chunks.append(buf.strip())
+            buf = line
+    if buf: chunks.append(buf.strip())
+    return chunks
+
+policy_data = load_mirag_brain(PDF_PATH)
+
+# -------------------- 3. SMART RETRIEVAL --------------------
+def get_context(query: str):
+    if not policy_data: return ""
+    q_words = set(query.lower().split())
+    scored = sorted([(len(q_words & set(c.lower().split())), c) for c in policy_data], reverse=True, key=lambda x: x[0])
+    return "\n\n".join([c for score, c in scored[:3] if score > 0])
+
+# -------------------- 4. MiRAG INTELLIGENCE --------------------
+def mirag_chat(question: str, history):
+    context = get_context(question)
+    today = datetime.datetime.now().strftime("%d %B %Y")
     
-    if st.button("Clear Chat"):
-        st.session_state.messages = []
-        st.rerun()
+    # Updated 2025 Intelligence (Grading/Attendance updates)
+    system_prompt = f"""
+You are MiRAG (Mir MUHAMMAD Rafique's Chat Bot), a professional Academic Policy Assistant.
+Current Date: {today}.
 
-# --- RAG ENGINE ---
-def create_knowledge_base(pdfs, key):
-    all_docs = []
-    for pdf in pdfs:
-        # Temporary save to allow PyPDFLoader to read it
-        with open("temp.pdf", "wb") as f:
-            f.write(pdf.getbuffer())
-        loader = PyPDFLoader("temp.pdf")
-        all_docs.extend(loader.load())
-        os.remove("temp.pdf") # Clean up
+CORE INSTRUCTIONS:
+1. Primary Source: Use the PDF context provided.
+2. 2025 Updates: Be aware that for 2025, the passing threshold is now 50% for undergraduates. 
+   A new grade "XF" is used for failure due to attendance shortage. 
+   The Probation limit is now 1.70 Semester GPA.
+3. Style: Professional, confident, and direct. 
+4. DO NOT mention "searching the PDF" or "checking my database".
 
-    # Split: Break PDF text into 1000-character chunks
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    final_chunks = text_splitter.split_documents(all_docs)
+PDF Context:
+{context}
+"""
 
-    # Embed & Store: Convert text to math (vectors) and save in FAISS
-    embeddings = OpenAIEmbeddings(openai_api_key=key)
-    vectorstore = FAISS.from_documents(final_chunks, embeddings)
-    return vectorstore.as_retriever()
+    messages = [{"role": "system", "content": system_prompt}]
+    for m in history[-6:]: messages.append(m)
+    messages.append({"role": "user", "content": question})
 
-# --- CHAT LOGIC ---
+    try:
+        r = requests.post("https://api.groq.com/openai/v1/chat/completions", 
+                          json={"model": MODEL_NAME, "messages": messages, "temperature": 0.3},
+                          headers={"Authorization": f"Bearer {GROQ_API_KEY}"})
+        return r.json()["choices"][0]["message"]["content"]
+    except:
+        return "⚠️ MiRAG is currently experiencing a connection issue."
+
+# -------------------- 5. USER INTERFACE --------------------
+st.title("🤖 MiRAG")
+st.subheader("Mir MUHAMMAD Rafique's Chat Bot")
+
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    st.session_state.messages = [{"role": "assistant", "content": "Assalam o Alaikum! I am MiRAG. I have indexed your Academic Policy. How can I assist you?"}]
 
-# Display history
 for msg in st.session_state.messages:
-    st.chat_message(msg["role"]).write(msg["content"])
+    with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
-# User Input
-if prompt := st.chat_input("Ask a question about your PDFs"):
-    if not api_key:
-        st.error("Please provide an API Key in the sidebar.")
-    else:
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        st.chat_message("user").write(prompt)
+if user_input := st.chat_input("Ask MiRAG about university policies..."):
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"): st.markdown(user_input)
 
-        with st.chat_message("assistant"):
-            with st.spinner("MiRAG is scanning documents..."):
-                try:
-                    # Initialize Brain
-                    llm = ChatOpenAI(model="gpt-4o-mini", openai_api_key=api_key)
-                    
-                    if uploaded_pdfs:
-                        # RAG Pipeline
-                        retriever = create_knowledge_base(uploaded_pdfs, api_key)
-                        
-                        system_prompt = (
-                            "You are MiRAG, a precise document assistant. "
-                            "Use the context below to answer. If the answer isn't in the context, "
-                            "say you don't know based on the files provided.\n\n{context}"
-                        )
-                        prompt_template = ChatPromptTemplate.from_messages([
-                            ("system", system_prompt),
-                            ("human", "{input}"),
-                        ])
-                        
-                        combine_docs_chain = create_stuff_documents_chain(llm, prompt_template)
-                        rag_chain = create_retrieval_chain(retriever, combine_docs_chain)
-                        
-                        response = rag_chain.invoke({"input": prompt})
-                        full_res = response["answer"]
-                    else:
-                        # Fallback to general AI if no PDF
-                        full_res = llm.invoke(prompt).content
-
-                    st.write(full_res)
-                    st.session_state.messages.append({"role": "assistant", "content": full_res})
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+    with st.chat_message("assistant"):
+        with st.spinner("MiRAG is analyzing..."):
+            ans = mirag_chat(user_input, st.session_state.messages[:-1])
+        st.markdown(ans)
+        st.session_state.messages.append({"role": "assistant", "content": ans})
