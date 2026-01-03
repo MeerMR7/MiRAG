@@ -1,46 +1,57 @@
 import streamlit as st
-import os
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import FAISS
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
+import openai
+from PyPDF2 import PdfReader
 
 # ---------------- UI ----------------
 st.set_page_config(
-    page_title="Sufiyan’s ChatBot | Academic Policy",
+    page_title="Sufiyan’s ChatBot | PDF Chat",
     page_icon="🤖"
 )
 
+st.markdown("""
+<style>
+body {
+    background-color: #000000;
+    color: white;
+}
+[data-testid="stAppViewContainer"] {
+    background-color: #000000;
+}
+[data-testid="stHeader"] {
+    background-color: #000000;
+}
+[data-testid="stSidebar"] {
+    background-color: #111111;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("🤖 Sufiyan’s ChatBot")
-st.caption("Academic Policy Manual Assistant")
+st.markdown(
+    "<div style='text-align:right; color:gray;'>Developed By Sufiyan</div>",
+    unsafe_allow_html=True
+)
 st.markdown("---")
 
-# Sidebar
+# ---------------- SIDEBAR ----------------
 with st.sidebar:
     st.header("Settings")
     api_key = st.text_input("Enter OpenAI API Key", type="password")
 
-# ---------------- RAG ENGINE ----------------
-PDF_PATH = "Academic-Policy-Manual-for-Students2.pdf"
+    st.subheader("Upload PDF")
+    pdf_file = st.file_uploader("Upload a PDF", type="pdf")
 
-@st.cache_resource
-def create_knowledge_base(pdf_path, key):
-    loader = PyPDFLoader(pdf_path)
-    docs = loader.load()
+    if st.button("Clear Chat"):
+        st.session_state.messages = []
+        st.rerun()
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=100
-    )
-    chunks = splitter.split_documents(docs)
-
-    embeddings = OpenAIEmbeddings(openai_api_key=key)
-    vectorstore = FAISS.from_documents(chunks, embeddings)
-
-    return vectorstore.as_retriever()
+# ---------------- PDF READER ----------------
+def read_pdf(file):
+    reader = PdfReader(file)
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text()
+    return text
 
 # ---------------- CHAT MEMORY ----------------
 if "messages" not in st.session_state:
@@ -50,49 +61,46 @@ for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
 # ---------------- CHAT INPUT ----------------
-if prompt := st.chat_input("Ask about academic policies"):
+if prompt := st.chat_input("Ask a question about the PDF"):
     if not api_key:
-        st.error("Please enter your OpenAI API key.")
-    elif not os.path.exists(PDF_PATH):
-        st.error("Academic-Policy-Manual-for-Students2.pdf not found.")
+        st.error("Please enter your OpenAI API Key.")
+    elif not pdf_file:
+        st.error("Please upload a PDF file.")
     else:
+        openai.api_key = api_key
+
+        pdf_text = read_pdf(pdf_file)
+
         st.session_state.messages.append(
             {"role": "user", "content": prompt}
         )
         st.chat_message("user").write(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Reading Academic Policy Manual..."):
-                llm = ChatOpenAI(
-                    model="gpt-4o-mini",
-                    openai_api_key=api_key
-                )
+            with st.spinner("Sufiyan’s ChatBot is reading the PDF..."):
+                try:
+                    response = openai.ChatCompletion.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are Sufiyan’s ChatBot. "
+                                    "Answer ONLY using the provided PDF content. "
+                                    "If the answer is not in the document, say you don't know.\n\n"
+                                    f"{pdf_text}"
+                                )
+                            },
+                            {"role": "user", "content": prompt}
+                        ]
+                    )
 
-                retriever = create_knowledge_base(PDF_PATH, api_key)
+                    answer = response["choices"][0]["message"]["content"]
+                    st.write(answer)
 
-                system_prompt = (
-                    "You are Sufiyan’s ChatBot, an academic policy assistant. "
-                    "Answer ONLY using the Academic Policy Manual provided. "
-                    "If the answer is not found, say you don't know.\n\n{context}"
-                )
+                    st.session_state.messages.append(
+                        {"role": "assistant", "content": answer}
+                    )
 
-                prompt_template = ChatPromptTemplate.from_messages([
-                    ("system", system_prompt),
-                    ("human", "{input}")
-                ])
-
-                combine_chain = create_stuff_documents_chain(
-                    llm, prompt_template
-                )
-
-                rag_chain = create_retrieval_chain(
-                    retriever, combine_chain
-                )
-
-                response = rag_chain.invoke({"input": prompt})
-                answer = response["answer"]
-
-                st.write(answer)
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": answer}
-                )
+                except Exception as e:
+                    st.error(str(e))
