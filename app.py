@@ -9,7 +9,7 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 
 # UI CONFIGURATION
-st.set_page_config(page_title="Sufiyan's ChatBot", page_icon="🤖")
+st.set_page_config(page_title="Sufiyan's ChatBot", page_icon="🔮")
 
 # CUSTOM CSS FOR BLACK BACKGROUND
 st.markdown("""
@@ -20,7 +20,7 @@ st.markdown("""
         color: #ffffff;
     }
 
-    /* Text color for specific elements */
+    /* Ensure text visibility */
     h1, h2, h3, p, span, .stMarkdown {
         color: #ffffff !important;
     }
@@ -34,7 +34,7 @@ st.markdown("""
 
     .developer-tag { 
         text-align: right; 
-        color: #bbbbbb; 
+        color: #6c757d; 
         font-size: 14px; 
         margin-top: -20px; 
     }
@@ -43,7 +43,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🤖 Sufiyan's ChatBot")
+st.title("🔮 Sufiyan's ChatBot")
 st.markdown("<div class='developer-tag'>Developed By Sufiyan</div>", unsafe_allow_html=True)
 st.markdown("---")
 
@@ -63,15 +63,18 @@ with st.sidebar:
 def create_knowledge_base(pdfs, key):
     all_docs = []
     for pdf in pdfs:
+        # Temporary save to allow PyPDFLoader to read it
         with open("temp.pdf", "wb") as f:
             f.write(pdf.getbuffer())
         loader = PyPDFLoader("temp.pdf")
         all_docs.extend(loader.load())
-        os.remove("temp.pdf")
+        os.remove("temp.pdf") # Clean up
 
+    # Split: Break PDF text into 1000-character chunks
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     final_chunks = text_splitter.split_documents(all_docs)
 
+    # Embed & Store
     embeddings = OpenAIEmbeddings(openai_api_key=key)
     vectorstore = FAISS.from_documents(final_chunks, embeddings)
     return vectorstore.as_retriever()
@@ -80,9 +83,11 @@ def create_knowledge_base(pdfs, key):
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Display history
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
+# User Input
 if prompt := st.chat_input("Ask a question about your PDFs"):
     if not api_key:
         st.error("Please provide an API Key in the sidebar.")
@@ -91,11 +96,12 @@ if prompt := st.chat_input("Ask a question about your PDFs"):
         st.chat_message("user").write(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Scanning documents..."):
+            with st.spinner("Sufiyan's ChatBot is scanning documents..."):
                 try:
                     llm = ChatOpenAI(model="gpt-4o-mini", openai_api_key=api_key)
                     
                     if uploaded_pdfs:
+                        # RAG Pipeline
                         retriever = create_knowledge_base(uploaded_pdfs, api_key)
                         
                         system_prompt = (
@@ -114,6 +120,7 @@ if prompt := st.chat_input("Ask a question about your PDFs"):
                         response = rag_chain.invoke({"input": prompt})
                         full_res = response["answer"]
                     else:
+                        # Fallback to general AI if no PDF
                         full_res = llm.invoke(prompt).content
 
                     st.write(full_res)
