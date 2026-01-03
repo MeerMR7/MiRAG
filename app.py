@@ -27,10 +27,7 @@ body {
 """, unsafe_allow_html=True)
 
 st.title("🤖 Sufiyan’s ChatBot")
-st.markdown(
-    "<div style='text-align:right; color:gray;'>Developed By Sufiyan</div>",
-    unsafe_allow_html=True
-)
+st.markdown("<div style='text-align:right; color:gray;'>Developed By Sufiyan</div>", unsafe_allow_html=True)
 st.markdown("---")
 
 # ---------------- SIDEBAR ----------------
@@ -50,7 +47,9 @@ def read_pdf(file):
     reader = PdfReader(file)
     text = ""
     for page in reader.pages:
-        text += page.extract_text()
+        page_text = page.extract_text()
+        if page_text:
+            text += page_text
     return text
 
 # ---------------- CHAT MEMORY ----------------
@@ -71,9 +70,7 @@ if prompt := st.chat_input("Ask a question about the PDF"):
 
         pdf_text = read_pdf(pdf_file)
 
-        st.session_state.messages.append(
-            {"role": "user", "content": prompt}
-        )
+        st.session_state.messages.append({"role": "user", "content": prompt})
         st.chat_message("user").write(prompt)
 
         with st.chat_message("assistant"):
@@ -85,8 +82,8 @@ if prompt := st.chat_input("Ask a question about the PDF"):
                             {
                                 "role": "system",
                                 "content": (
-                                    "You are Sufiyan’s ChatBot. "
-                                    "Answer ONLY using the provided PDF content. "
+                                    "You are Sufiyan’s ChatBot, an academic assistant. "
+                                    "Answer ONLY using the PDF content below. "
                                     "If the answer is not in the document, say you don't know.\n\n"
                                     f"{pdf_text}"
                                 )
@@ -97,10 +94,7 @@ if prompt := st.chat_input("Ask a question about the PDF"):
 
                     answer = response["choices"][0]["message"]["content"]
                     st.write(answer)
-
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": answer}
-                    )
+                    st.session_state.messages.append({"role": "assistant", "content": answer})
 
                 except Exception as e:
                     st.error(str(e))
