@@ -8,6 +8,7 @@ st.set_page_config(
     page_icon="🤖"
 )
 
+# Black background
 st.markdown("""
 <style>
 body {
@@ -49,7 +50,7 @@ def read_pdf(file):
     for page in reader.pages:
         page_text = page.extract_text()
         if page_text:
-            text += page_text
+            text += page_text + "\n"
     return text
 
 # ---------------- CHAT MEMORY ----------------
@@ -60,7 +61,7 @@ for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
 # ---------------- CHAT INPUT ----------------
-if prompt := st.chat_input("Ask a question about the PDF"):
+if prompt := st.chat_input("Ask a question about the uploaded PDF"):
     if not api_key:
         st.error("Please enter your OpenAI API Key.")
     elif not pdf_file:
@@ -74,7 +75,7 @@ if prompt := st.chat_input("Ask a question about the PDF"):
         st.chat_message("user").write(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Sufiyan’s ChatBot is reading the PDF..."):
+            with st.spinner("Sufiyan’s ChatBot is reading your PDF..."):
                 try:
                     response = openai.ChatCompletion.create(
                         model="gpt-3.5-turbo",
@@ -83,7 +84,7 @@ if prompt := st.chat_input("Ask a question about the PDF"):
                                 "role": "system",
                                 "content": (
                                     "You are Sufiyan’s ChatBot, an academic assistant. "
-                                    "Answer ONLY using the PDF content below. "
+                                    "Answer ONLY using the content of the PDF uploaded by the user. "
                                     "If the answer is not in the document, say you don't know.\n\n"
                                     f"{pdf_text}"
                                 )
