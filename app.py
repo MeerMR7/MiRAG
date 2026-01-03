@@ -1,101 +1,162 @@
 import streamlit as st
-import openai
-from PyPDF2 import PdfReader
+import pdfplumber
+import requests
+import datetime
 
-# ---------------- UI ----------------
-st.set_page_config(
-    page_title="Sufiyan’s ChatBot | PDF Chat",
-    page_icon="🤖"
-)
+# -------------------- BASIC SETUP --------------------
+st.set_page_config(page_title="Sufiyans chatBot", layout="centered")
 
-# Black background
-st.markdown("""
-<style>
-body {
-    background-color: #000000;
-    color: white;
-}
-[data-testid="stAppViewContainer"] {
-    background-color: #000000;
-}
-[data-testid="stHeader"] {
-    background-color: #000000;
-}
-[data-testid="stSidebar"] {
-    background-color: #111111;
-}
-</style>
-""", unsafe_allow_html=True)
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+PDF_PATH = "data/Sufiyan_Chatbot_Company_Manual.pdf"
+MODEL_NAME = "llama-3.1-8b-instant"
 
-st.title("🤖 Sufiyan’s ChatBot")
-st.markdown("<div style='text-align:right; color:gray;'>Developed By Sufiyan</div>", unsafe_allow_html=True)
-st.markdown("---")
 
-# ---------------- SIDEBAR ----------------
-with st.sidebar:
-    st.header("Settings")
-    api_key = st.text_input("Enter OpenAI API Key", type="password")
-
-    st.subheader("Upload PDF")
-    pdf_file = st.file_uploader("Upload a PDF", type="pdf")
-
-    if st.button("Clear Chat"):
-        st.session_state.messages = []
-        st.rerun()
-
-# ---------------- PDF READER ----------------
-def read_pdf(file):
-    reader = PdfReader(file)
+# -------------------- LOAD + CHUNK PDF --------------------
+@st.cache_data
+def load_chunks(max_chars: int = 600):
     text = ""
-    for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text += page_text + "\n"
-    return text
+    with pdfplumber.open(PDF_PATH) as pdf:
+        for page in pdf.pages:
+            tx = page.extract_text()
+            if tx:
+                text += tx + "\n"
 
-# ---------------- CHAT MEMORY ----------------
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+    raw_parts = [p.strip() for p in text.split("\n") if p.strip()]
+    chunks = []
+    buf = ""
 
-for msg in st.session_state.messages:
-    st.chat_message(msg["role"]).write(msg["content"])
+    for part in raw_parts:
+        if len(buf) + len(part) <= max_chars:
+            buf += " " + part
+        else:
+            chunks.append(buf.strip())
+            buf = part
 
-# ---------------- CHAT INPUT ----------------
-if prompt := st.chat_input("Ask a question about the uploaded PDF"):
-    if not api_key:
-        st.error("Please enter your OpenAI API Key.")
-    elif not pdf_file:
-        st.error("Please upload a PDF file.")
+    if buf:
+        chunks.append(buf.strip())
+
+    return chunks
+
+
+pdf_chunks = load_chunks()
+
+
+# -------------------- SIMPLE RETRIEVAL --------------------
+def retrieve_context(query: str, top_k: int = 3):
+    q_words = set(query.lower().split())
+    scored = []
+
+    for ch in pdf_chunks:
+        ch_words = set(ch.lower().split())
+        score = len(q_words & ch_words)
+        if score > 0:
+            scored.append((score, ch))
+
+    if not scored:
+        return ""
+
+    scored.sort(reverse=True, key=lambda x: x[0])
+    return "\n\n".join([c for _, c in scored[:top_k]])
+
+
+# -------------------- GROQ API CALL --------------------
+def llama_chat(messages):
+    url = "https://api.groq.com/openai/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": MODEL_NAME,
+        "messages": messages,
+        "temperature": 0.4,
+    }
+
+    response = requests.post(url, json=payload, headers=headers)
+    result = response.json()
+
+    try:
+        return result["choices"][0]["message"]["content"]
+    except:
+        return "⚠️ Groq API Error:\n" + str(result)
+
+
+# -------------------- RAG + UPDATED INFO (NO SEARCHING TEXT) --------------------
+def get_answer(question: str, history):
+    context = retrieve_context(question)
+    today = datetime.datetime.now().strftime("%d %B %Y (%Y)")
+    pdf_strength = len(context.strip())
+
+    if pdf_strength < 50:
+        # PDF does not contain relevant information → use AI updated knowledge
+        system_prompt = f"""
+You are Sufiyans chatBot.
+
+Rules:
+- Give clear and direct answers.
+- Use your updated general knowledge (today = {today}).
+- Do NOT say anything about "searching", "checking", "researching", or "not knowing".
+- Never restrict information to the year 2023.
+"""
     else:
-        openai.api_key = api_key
+        # PDF has useful context → use it first, but allow updated info too
+        system_prompt = f"""
+You are Sufiyans chatBot.
 
-        pdf_text = read_pdf(pdf_file)
+Use the following PDF text as your main reference. 
+If updated information (today = {today}) is needed, include it naturally.
 
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        st.chat_message("user").write(prompt)
+PDF Context:
+---------------------
+{context}
+---------------------
 
-        with st.chat_message("assistant"):
-            with st.spinner("Sufiyan’s ChatBot is reading your PDF..."):
-                try:
-                    response = openai.ChatCompletion.create(
-                        model="gpt-3.5-turbo",
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": (
-                                    "You are Sufiyan’s ChatBot, an academic assistant. "
-                                    "Answer ONLY using the content of the PDF uploaded by the user. "
-                                    "If the answer is not in the document, say you don't know.\n\n"
-                                    f"{pdf_text}"
-                                )
-                            },
-                            {"role": "user", "content": prompt}
-                        ]
-                    )
+Rules:
+- Provide confident and direct answers.
+- Do NOT say "I am searching" or "I am researching".
+- Never limit your knowledge to only 2023.
+"""
 
-                    answer = response["choices"][0]["message"]["content"]
-                    st.write(answer)
-                    st.session_state.messages.append({"role": "assistant", "content": answer})
+    # Build message list
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    for m in history[-6:]:
+        messages.append(m)
 
-                except Exception as e:
-                    st.error(str(e))
+    messages.append({"role": "user", "content": question})
+
+    return llama_chat(messages)
+
+
+# -------------------- STREAMLIT UI --------------------
+st.title("🤖 Sufiyans chatBot")
+
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assistant",
+         "content": "Assalam o Alaikum! 👋 Main Sufiyans chatBot hoon. "
+                    "Jo Bhi Phouchna Bindaas Phoucho Mai Ho Na Apki Madad Kay Liye"}
+    ]
+
+# Display chat messages
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# User input
+user_input = st.chat_input("Apna sawal likho...")
+
+if user_input:
+    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Soch raha hoon..."):
+            answer = get_answer(user_input, st.session_state.messages)
+        st.markdown(answer)
+
+    st.session_state.messages.append({"role": "assistant", "content": answer})
