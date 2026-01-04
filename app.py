@@ -4,7 +4,7 @@ import os
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Mir MUHAMMAD & Co | AI",
+    page_title="MR7 | AI",
     page_icon="🚀",
     layout="centered"
 )
