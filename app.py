@@ -2,39 +2,18 @@ import streamlit as st
 import pdfplumber
 import requests
 import datetime
-import os
-import re
 
-# -------------------- 1. PAGE CONFIG & BRANDING --------------------
-st.set_page_config(page_title="Mir MUHAMMAD Rafique & Co Advisor", layout="centered")
+# -------------------- BASIC SETUP --------------------
+st.set_page_config(page_title="Mir MUHAMMAD Rafique's ChatBot", layout="centered")
 
-# Professional Light Theme CSS
-st.markdown("""
-    <style>
-    .stApp { background-color: #f8fafc !important; color: #0f172a !important; }
-    [data-testid="stSidebar"] { background-color: #ffffff !important; border-right: 1px solid #e2e8f0; }
-    .footer {
-        position: fixed; left: 0; bottom: 0; width: 100%;
-        background-color: #ffffff; color: #1e293b;
-        text-align: center; padding: 10px; font-weight: bold;
-        border-top: 1px solid #e2e8f0; z-index: 100;
-    }
-    </style>
-    <div class='footer'>Developed By Mir MUHAMMAD Rafique And Co</div>
-    """, unsafe_allow_html=True)
-
-# -------------------- 2. SETUP & PATHS --------------------
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-# Updated to your specific PDF filename
 PDF_PATH = "Academic-Policy-Manual-for-Students2.pdf"
-MODEL_NAME = "llama-3.1-70b-versatile" # Higher intelligence for production
+MODEL_NAME = "llama-3.1-8b-instant"
 
-# -------------------- 3. LOAD + CHUNK PDF --------------------
+
+# -------------------- LOAD + CHUNK PDF --------------------
 @st.cache_data
-def load_chunks(max_chars: int = 700):
-    if not os.path.exists(PDF_PATH):
-        return None
-    
+def load_chunks(max_chars: int = 600):
     text = ""
     with pdfplumber.open(PDF_PATH) as pdf:
         for page in pdf.pages:
@@ -55,19 +34,20 @@ def load_chunks(max_chars: int = 700):
 
     if buf:
         chunks.append(buf.strip())
+
     return chunks
+
 
 pdf_chunks = load_chunks()
 
-# -------------------- 4. SIMPLE RETRIEVAL --------------------
-def retrieve_context(query: str, top_k: int = 4):
-    if not pdf_chunks:
-        return ""
-    q_words = set(re.findall(r'\w+', query.lower()))
+
+# -------------------- SIMPLE RETRIEVAL --------------------
+def retrieve_context(query: str, top_k: int = 3):
+    q_words = set(query.lower().split())
     scored = []
 
     for ch in pdf_chunks:
-        ch_words = set(re.findall(r'\w+', ch.lower()))
+        ch_words = set(ch.lower().split())
         score = len(q_words & ch_words)
         if score > 0:
             scored.append((score, ch))
@@ -78,91 +58,105 @@ def retrieve_context(query: str, top_k: int = 4):
     scored.sort(reverse=True, key=lambda x: x[0])
     return "\n\n".join([c for _, c in scored[:top_k]])
 
-# -------------------- 5. GROQ API CALL --------------------
+
+# -------------------- GROQ API CALL --------------------
 def llama_chat(messages):
     url = "https://api.groq.com/openai/v1/chat/completions"
+
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
     }
+
     payload = {
         "model": MODEL_NAME,
         "messages": messages,
-        "temperature": 0.3, # Lower temperature = more professional/accurate
+        "temperature": 0.4,
     }
 
-    try:
-        response = requests.post(url, json=payload, headers=headers)
-        result = response.json()
-        return result["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"⚠️ System Connection Error: {str(e)}"
+    response = requests.post(url, json=payload, headers=headers)
+    result = response.json()
 
-# -------------------- 6. RAG LOGIC --------------------
+    try:
+        return result["choices"][0]["message"]["content"]
+    except:
+        return "⚠️ Groq API Error:\n" + str(result)
+
+
+# -------------------- RAG + UPDATED INFO (NO SEARCHING TEXT) --------------------
 def get_answer(question: str, history):
     context = retrieve_context(question)
-    today = datetime.datetime.now().strftime("%d %B %Y")
-    
-    # Check if we have PDF data to work with
-    if len(context.strip()) < 40:
+    today = datetime.datetime.now().strftime("%d %B %Y (%Y)")
+    pdf_strength = len(context.strip())
+
+    if pdf_strength < 50:
+        # PDF does not contain relevant information → use AI updated knowledge
         system_prompt = f"""
-You are the Mir MUHAMMAD Rafique And Co AI Advisor.
-Today's Date: {today}
+You are Mir MUHAMMAD Rafique's Chatbot.
 
 Rules:
-- Provide clear, direct, and professional answers.
-- Use your internal updated knowledge.
-- Never say "I am searching" or "Checking the files". 
-- Speak with authority and confidence.
+- Give clear and direct answers.
+- Use your updated general knowledge (today = {today}).
+- Do NOT say anything about "searching", "checking", "researching", or "not knowing".
+- Never restrict information to the year 2023.
 """
     else:
+        # PDF has useful context → use it first, but allow updated info too
         system_prompt = f"""
-You are the Mir MUHAMMAD Rafique And Co AI Advisor.
-Today's Date: {today}
+You are Mir MUHAMMAD Rafique's Chatbot.
 
-Primary Source (Academic Policy Manual):
+Use the following PDF text as your main reference. 
+If updated information (today = {today}) is needed, include it naturally.
+
+PDF Context:
 ---------------------
 {context}
 ---------------------
 
 Rules:
-- Base your answers primarily on the Academic Policy Manual context provided above.
-- Provide confident and direct advice.
-- If info is missing, guide the user to the official Administration Office.
-- Do NOT use phrases like "Based on the text provided" or "I am researching".
+- Provide confident and direct answers.
+- Do NOT say "I am searching" or "I am researching".
+- Never limit your knowledge to only 2023.
 """
 
+    # Build message list
     messages = [{"role": "system", "content": system_prompt}]
-    for m in history[-5:]: # Maintain short memory for better context
+    
+    for m in history[-6:]:
         messages.append(m)
+
     messages.append({"role": "user", "content": question})
 
     return llama_chat(messages)
 
-# -------------------- 7. STREAMLIT UI --------------------
-st.title("📋 Academic Policy Advisor")
-st.subheader("Mir MUHAMMAD Rafique And Co | Student Portal")
+
+# -------------------- STREAMLIT UI --------------------
+st.title("🤖 Mir MUHAMMAD Rafique's Chatbot")
 
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assistant",
-         "content": "Hello. I am the AI Advisor for Mir MUHAMMAD Rafique And Co. How can I assist you with academic policies today?"}
+         "content": "Assalam o Alaikum! 👋I Am  Mir MUHAMMAD Rafique's Chatbot. "
+                    "Ask Me About Academic Policies"}
     ]
 
-# Display chat
+# Display chat messages
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
 # User input
-if user_input := st.chat_input("Enter your policy question here..."):
+user_input = st.chat_input("Apna sawal likho...")
+
+if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
+
     with st.chat_message("user"):
         st.markdown(user_input)
 
     with st.chat_message("assistant"):
-        with st.spinner("Processing inquiry..."):
+        with st.spinner("Soch raha hoon..."):
             answer = get_answer(user_input, st.session_state.messages)
-            st.markdown(answer)
+        st.markdown(answer)
 
     st.session_state.messages.append({"role": "assistant", "content": answer})
