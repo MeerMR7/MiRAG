@@ -4,18 +4,14 @@ import os
 import re
 from groq import Groq
 
-# ==========================================
 # 1. HARDCODED CONFIGURATION
-# ==========================================
-# Your key is built-in here. No sidebar input needed.
+# Your key is here. NOTE: GitHub will block this until you click "Allow"
 GROQ_API_KEY = "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"
 PDF_FILENAME = "Academic-Policy-Manual-for-Students2.pdf"
 
 st.set_page_config(page_title="HasMir's ChatBot", page_icon="🔮")
 
-# ==========================================
-# 2. PURE BLACK THEME UI
-# ==========================================
+# 2. UI THEME
 st.markdown("""
     <style>
     .stApp { background-color: #000000 !important; color: #ffffff !important; }
@@ -36,9 +32,7 @@ st.markdown("<div class='developer-tag'>Developed By HasMir</div>", unsafe_allow
 st.write("### RAG Assistant: Academic Policy Expert")
 st.markdown("---")
 
-# ==========================================
-# 3. RAG ENGINE (PDF Retrieval)
-# ==========================================
+# 3. RAG ENGINE
 def get_pdf_chunks(path):
     chunks = []
     if os.path.exists(path):
@@ -47,7 +41,6 @@ def get_pdf_chunks(path):
                 for page in pdf.pages:
                     text = page.extract_text()
                     if text:
-                        # Split text into paragraphs for searching
                         chunks.extend(text.split('\n\n'))
             return chunks
         except: return []
@@ -58,55 +51,43 @@ def retrieve_context(query, chunks, top_n=5):
     scored_chunks = []
     for chunk in chunks:
         chunk_words = set(re.findall(r'\w+', chunk.lower()))
-        # Matching word score
         score = len(query_words.intersection(chunk_words))
         if score > 0:
             scored_chunks.append((score, chunk))
     scored_chunks.sort(key=lambda x: x[0], reverse=True)
     return [c[1] for c in scored_chunks[:top_n]]
 
-# ==========================================
 # 4. INITIALIZATION
-# ==========================================
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Load the PDF content into memory
 if "pdf_data" not in st.session_state:
     st.session_state.pdf_data = get_pdf_chunks(PDF_FILENAME)
 
-# ==========================================
-# 5. SIDEBAR (Status only)
-# ==========================================
+# 5. SIDEBAR STATUS
 with st.sidebar:
     st.header("System Status")
     if os.path.exists(PDF_FILENAME):
-        st.success("✅ Manual Loaded")
+        st.success("✅ Manual Active")
     else:
         st.error(f"❌ {PDF_FILENAME} not found.")
-    
-    if st.button("Clear Chat History"):
-        st.session_state.messages = []
-        st.rerun()
 
-# ==========================================
-# 6. CHAT INTERFACE
-# ==========================================
+# 6. CHAT LOGIC
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-if prompt := st.chat_input("Ask a policy question..."):
+if prompt := st.chat_input("Ask a question about the policy..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.chat_message("user").write(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("HasMir's ChatBot is scanning the manual..."):
+        with st.spinner("HasMir's ChatBot is analyzing..."):
             try:
-                # 1. RETRIEVAL
+                # Get relevant context from PDF
                 relevant_context = retrieve_context(prompt, st.session_state.pdf_data)
                 context_str = "\n\n".join(relevant_context)
                 
-                # 2. GENERATION
+                # FIX FOR PROXIES ERROR: Initialize clean client
                 client = Groq(api_key=GROQ_API_KEY)
                 
                 response = client.chat.completions.create(
