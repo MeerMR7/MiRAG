@@ -1,89 +1,76 @@
 import streamlit as st
-import pdfplumber
-import os
-import re
 from groq import Groq
+import os
 
-# --- PASTE YOUR KEY HERE ---
-MY_GROQ_KEY = "gsk_your_actual_key_here" 
+# --- PAGE CONFIGURATION ---
+st.set_page_config(
+    page_title="Mir MUHAMMAD & Co | AI",
+    page_icon="🚀",
+    layout="centered"
+)
 
-# 1. PAGE CONFIGURATION
-st.set_page_config(page_title="HasMir's ChatBot", page_icon="🔮")
-
-# 2. THEME CSS
+# --- CUSTOM STYLING (Ensuring no black background) ---
 st.markdown("""
     <style>
-    .stApp { background-color: #000000; color: #ffffff; }
-    [data-testid="stSidebar"] { background-color: #111111; }
-    .developer-tag { text-align: right; color: #888888; font-size: 14px; margin-top: -20px; }
+        .stApp {
+            background-color: #ffffff;
+        }
+        .footer {
+            position: fixed;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            background-color: #f8f9fa;
+            color: #333;
+            text-align: center;
+            padding: 10px;
+            font-weight: bold;
+            border-top: 1px solid #e7e7e7;
+        }
     </style>
-    """, unsafe_allow_html=True)
+    <div class="footer">
+        Developed By Mir MUHAMMAD Rafique And Co
+    </div>
+    """, unsafe_allow_index=True)
 
-st.title("🔮 HasMir's ChatBot")
-st.markdown("<div class='developer-tag'>Developed By HasMir</div>", unsafe_allow_html=True)
+# --- GROQ API SETUP ---
+# It's best to set your key in your system environment or a .env file
+# For quick testing, you can replace 'your_api_key_here' directly
+api_key = os.environ.get("GROQ_API_KEY") or "your_api_key_here"
+client = Groq(api_key=api_key)
 
-# 3. SIDEBAR
-with st.sidebar:
-    st.header("Document Status")
-    manual_path = "Academic-Policy-Manual-for-Students2.pdf"
-    if os.path.exists(manual_path):
-        st.success("✅ PDF Loaded")
-    else:
-        st.error("❌ PDF Missing")
+# --- UI HEADER ---
+st.title("Groq AI Assistant")
+st.write("Enter your prompt below to interact with the LLM.")
 
-# 4. RAG ENGINE
-@st.cache_data
-def get_chunks_from_pdf(path):
-    chunks = []
-    try:
-        with pdfplumber.open(path) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-                if text:
-                    chunks.extend(text.split('\n\n'))
-        return chunks
-    except: return []
-
-def retrieve_relevant_chunks(query, chunks):
-    query_words = set(re.findall(r'\w+', query.lower()))
-    scored = []
-    for c in chunks:
-        score = len(query_words.intersection(set(re.findall(r'\w+', c.lower()))))
-        if score > 0: scored.append((score, c))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [s[1] for s in scored[:5]]
-
-# 5. INITIALIZATION
+# --- CHAT INTERFACE ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "pdf_chunks" not in st.session_state and os.path.exists(manual_path):
-    st.session_state.pdf_chunks = get_chunks_from_pdf(manual_path)
 
-for msg in st.session_state.messages:
-    st.chat_message(msg["role"]).write(msg["content"])
+# Display chat history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-# 6. CHAT INTERACTION
-if prompt := st.chat_input("Ask a question..."):
+# User Input
+if prompt := st.chat_input("How can I help you today?"):
     st.session_state.messages.append({"role": "user", "content": prompt})
-    st.chat_message("user").write(prompt)
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
+    # Generate Response
     with st.chat_message("assistant"):
         try:
-            # USES THE HARDCODED KEY DIRECTLY
-            client = Groq(api_key=MY_GROQ_KEY)
-            
-            context = "\n\n".join(retrieve_relevant_chunks(prompt, st.session_state.get("pdf_chunks", [])))
-            
             response = client.chat.completions.create(
+                model="llama3-70b-8192",
                 messages=[
-                    {"role": "system", "content": f"You are HasMir's ChatBot. Use this context: {context}"},
-                    *st.session_state.messages
+                    {"role": m["role"], "content": m["content"]}
+                    for m in st.session_state.messages
                 ],
-                model="llama-3.1-70b-versatile",
+                stream=False,
             )
-            
-            answer = response.choices[0].message.content
-            st.write(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
+            full_response = response.choices[0].message.content
+            st.markdown(full_response)
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
         except Exception as e:
             st.error(f"Error: {e}")
