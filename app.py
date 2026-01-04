@@ -5,9 +5,9 @@ import re
 from groq import Groq
 
 # ==========================================
-# 1. API KEY & CONFIG (Hardcoded All-in-One)
+# 1. HARDCODED CONFIGURATION
 # ==========================================
-# This removes the need for the sidebar input
+# Your key is built-in here. No sidebar input needed.
 GROQ_API_KEY = "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"
 PDF_FILENAME = "Academic-Policy-Manual-for-Students2.pdf"
 
@@ -47,6 +47,7 @@ def get_pdf_chunks(path):
                 for page in pdf.pages:
                     text = page.extract_text()
                     if text:
+                        # Split text into paragraphs for searching
                         chunks.extend(text.split('\n\n'))
             return chunks
         except: return []
@@ -57,6 +58,7 @@ def retrieve_context(query, chunks, top_n=5):
     scored_chunks = []
     for chunk in chunks:
         chunk_words = set(re.findall(r'\w+', chunk.lower()))
+        # Matching word score
         score = len(query_words.intersection(chunk_words))
         if score > 0:
             scored_chunks.append((score, chunk))
@@ -69,41 +71,42 @@ def retrieve_context(query, chunks, top_n=5):
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Load the PDF content into memory
 if "pdf_data" not in st.session_state:
     st.session_state.pdf_data = get_pdf_chunks(PDF_FILENAME)
 
 # ==========================================
-# 5. SIDEBAR (Status Only - No Input)
+# 5. SIDEBAR (Status only)
 # ==========================================
 with st.sidebar:
     st.header("System Status")
     if os.path.exists(PDF_FILENAME):
         st.success("✅ Manual Loaded")
     else:
-        st.error("❌ Manual Not Found")
+        st.error(f"❌ {PDF_FILENAME} not found.")
     
-    if st.button("Clear History"):
+    if st.button("Clear Chat History"):
         st.session_state.messages = []
         st.rerun()
 
 # ==========================================
-# 6. CHAT LOGIC
+# 6. CHAT INTERFACE
 # ==========================================
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-if prompt := st.chat_input("Ask a question about the policy..."):
+if prompt := st.chat_input("Ask a policy question..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.chat_message("user").write(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("HasMir's ChatBot is analyzing..."):
+        with st.spinner("HasMir's ChatBot is scanning the manual..."):
             try:
-                # Get Context
+                # 1. RETRIEVAL
                 relevant_context = retrieve_context(prompt, st.session_state.pdf_data)
                 context_str = "\n\n".join(relevant_context)
                 
-                # Call Groq Directly using the hardcoded key
+                # 2. GENERATION
                 client = Groq(api_key=GROQ_API_KEY)
                 
                 response = client.chat.completions.create(
