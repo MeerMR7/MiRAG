@@ -1,207 +1,114 @@
 import streamlit as st
+import pdfplumber
+from groq import Groq
+from tavily import TavilyClient
 
-import os
+# 1. PAGE CONFIGURATION
+st.set_page_config(page_title="Sufiyan's ChatBot", page_icon="🤖")
 
-from langchain_community.document_loaders import PyPDFLoader
-
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-
-from langchain_community.vectorstores import FAISS
-
-from langchain.chains import create_retrieval_chain
-
-from langchain.chains.combine_documents import create_stuff_documents_chain
-
-from langchain_core.prompts import ChatPromptTemplate
-
-
-
-#UI
-
-st.set_page_config(page_title="MiRAG | PDF Chat", page_icon="🔮")
-
-
-
+# 2. PURE BLACK THEME CSS
 st.markdown("""
-
     <style>
-
-    .developer-tag { text-align: right; color: #6c757d; font-size: 14px; margin-top: -20px; }
-
+    .stApp {
+        background-color: #000000 !important;
+        color: #ffffff !important;
+    }
+    [data-testid="stSidebar"] {
+        background-color: #111111 !important;
+    }
+    h1, h2, h3, p, span, label, .stMarkdown {
+        color: #ffffff !important;
+    }
+    .stTextInput>div>div>input {
+        background-color: #222222 !important;
+        color: white !important;
+        border: 1px solid #444 !important;
+    }
+    .developer-tag { 
+        text-align: right; 
+        color: #888888; 
+        font-size: 14px; 
+        margin-top: -20px; 
+    }
+    hr { border-top: 1px solid #333 !important; }
     </style>
-
     """, unsafe_allow_html=True)
 
-
-
-st.title("🔮 MiRAG")
-
-st.markdown("<div class='developer-tag'>Developed By HasMir</div>", unsafe_allow_html=True)
-
+st.title("🤖 Sufiyan's ChatBot")
+st.markdown("<div class='developer-tag'>Developed By Sufiyan</div>", unsafe_allow_html=True)
 st.markdown("---")
 
-
-
-#SIDEBAR
-
+# 3. SIDEBAR
 with st.sidebar:
-
     st.header("Settings")
-
-    api_key = st.text_input("Enter OpenAI API Key", type="password")
-
+    groq_api_key = st.text_input("Enter Groq API Key", type="password")
+    tavily_api_key = st.text_input("Enter Tavily API Key (Optional)", type="password")
     
-
     st.subheader("Your Documents")
-
     uploaded_pdfs = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
-
     
-
     if st.button("Clear Chat"):
-
         st.session_state.messages = []
-
         st.rerun()
 
-
-
-#RAG ENGINE
-
-def create_knowledge_base(pdfs, key):
-
-    all_docs = []
-
+# 4. HELPER FUNCTION: PDF EXTRACTION (pdfplumber)
+def extract_text_from_pdf(pdfs):
+    full_text = ""
     for pdf in pdfs:
+        with pdfplumber.open(pdf) as pdf_doc:
+            for page in pdf_doc.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    full_text += page_text + "\n"
+    return full_text
 
-        # Temporary save to allow PyPDFLoader to read it
-
-        with open("temp.pdf", "wb") as f:
-
-            f.write(pdf.getbuffer())
-
-        loader = PyPDFLoader("temp.pdf")
-
-        all_docs.extend(loader.load())
-
-        os.remove("temp.pdf") # Clean up
-
-
-
-    # Split: Break PDF text into 1000-character chunks
-
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-
-    final_chunks = text_splitter.split_documents(all_docs)
-
-
-
-    # Embed & Store: Convert text to math (vectors) and save in FAISS
-
-    embeddings = OpenAIEmbeddings(openai_api_key=key)
-
-    vectorstore = FAISS.from_documents(final_chunks, embeddings)
-
-    return vectorstore.as_retriever()
-
-
-
-#CHAT LOGIC
-
+# 5. CHAT INITIALIZATION
 if "messages" not in st.session_state:
-
     st.session_state.messages = []
 
-
-
-# Display history
-
+# Display History
 for msg in st.session_state.messages:
-
     st.chat_message(msg["role"]).write(msg["content"])
 
-
-
-# User Input
-
-if prompt := st.chat_input("Ask a question about your PDFs"):
-
-    if not api_key:
-
-        st.error("Please provide an API Key in the sidebar.")
-
+# 6. USER INPUT & AI LOGIC
+if prompt := st.chat_input("Ask Sufiyan's ChatBot..."):
+    if not groq_api_key:
+        st.error("Please provide a Groq API Key in the sidebar.")
     else:
-
+        # Add user message
         st.session_state.messages.append({"role": "user", "content": prompt})
-
         st.chat_message("user").write(prompt)
 
-
-
         with st.chat_message("assistant"):
-
-            with st.spinner("MiRAG is scanning documents..."):
-
+            with st.spinner("Sufiyan's ChatBot is analyzing..."):
                 try:
-
-                    # Initialize Brain
-
-                    llm = ChatOpenAI(model="gpt-4o-mini", openai_api_key=api_key)
-
+                    # Initialize Groq Client
+                    client = Groq(api_key=groq_api_key)
                     
-
+                    # Get PDF Context
+                    context = ""
                     if uploaded_pdfs:
-
-                        # RAG Pipeline
-
-                        retriever = create_knowledge_base(uploaded_pdfs, api_key)
-
-                        
-
-                        system_prompt = (
-
-                            "You are MiRAG, a precise document assistant. "
-
-                            "Use the context below to answer. If the answer isn't in the context, "
-
-                            "say you don't know based on the files provided.\n\n{context}"
-
-                        )
-
-                        prompt_template = ChatPromptTemplate.from_messages([
-
-                            ("system", system_prompt),
-
-                            ("human", "{input}"),
-
-                        ])
-
-                        
-
-                        combine_docs_chain = create_stuff_documents_chain(llm, prompt_template)
-
-                        rag_chain = create_retrieval_chain(retriever, combine_docs_chain)
-
-                        
-
-                        response = rag_chain.invoke({"input": prompt})
-
-                        full_res = response["answer"]
-
+                        context = extract_text_from_pdf(uploaded_pdfs)
+                    
+                    # Build System Prompt
+                    system_message = f"You are Sufiyan's ChatBot. "
+                    if context:
+                        system_message += f"Use this PDF content to answer: {context[:15000]}"
                     else:
+                        system_message += "Answer the user's questions clearly."
 
-                        # Fallback to general AI if no PDF
-
-                        full_res = llm.invoke(prompt).content
-
-
-
-                    st.write(full_res)
-
-                    st.session_state.messages.append({"role": "assistant", "content": full_res})
-
+                    # API Call
+                    response = client.chat.completions.create(
+                        model="llama-3.1-70b-versatile",
+                        messages=[
+                            {"role": "system", "content": system_message},
+                            *st.session_state.messages
+                        ]
+                    )
+                    
+                    answer = response.choices[0].message.content
+                    st.write(answer)
+                    st.session_state.messages.append({"role": "assistant", "content": answer})
+                    
                 except Exception as e:
-
                     st.error(f"Error: {str(e)}")
