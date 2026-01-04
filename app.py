@@ -5,8 +5,9 @@ import re
 from groq import Groq
 
 # ==========================================
-# 1. API & CONFIGURATION (HARDCODED)
+# 1. API KEY & CONFIG (Hardcoded All-in-One)
 # ==========================================
+# This removes the need for the sidebar input
 GROQ_API_KEY = "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"
 PDF_FILENAME = "Academic-Policy-Manual-for-Students2.pdf"
 
@@ -27,8 +28,6 @@ st.markdown("""
     }
     .developer-tag { text-align: right; color: #888888; font-size: 14px; margin-top: -20px; }
     hr { border-top: 1px solid #333 !important; }
-    /* Chat message styling */
-    .stChatMessage { background-color: #111111 !important; border-radius: 10px; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -38,10 +37,8 @@ st.write("### RAG Assistant: Academic Policy Expert")
 st.markdown("---")
 
 # ==========================================
-# 3. RAG ENGINE (PDF Retrieval Logic)
+# 3. RAG ENGINE (PDF Retrieval)
 # ==========================================
-
-# Function to extract text and break into chunks
 def get_pdf_chunks(path):
     chunks = []
     if os.path.exists(path):
@@ -50,101 +47,76 @@ def get_pdf_chunks(path):
                 for page in pdf.pages:
                     text = page.extract_text()
                     if text:
-                        # Split by double newline to keep paragraphs together
-                        paragraphs = text.split('\n\n')
-                        chunks.extend(paragraphs)
+                        chunks.extend(text.split('\n\n'))
             return chunks
-        except Exception as e:
-            st.error(f"Error reading PDF: {e}")
-            return []
+        except: return []
     return []
 
-# Function to find the most relevant chunks based on user query
 def retrieve_context(query, chunks, top_n=5):
     query_words = set(re.findall(r'\w+', query.lower()))
     scored_chunks = []
-    
     for chunk in chunks:
         chunk_words = set(re.findall(r'\w+', chunk.lower()))
-        # Count overlapping words (Basic Keyword Search)
         score = len(query_words.intersection(chunk_words))
         if score > 0:
             scored_chunks.append((score, chunk))
-    
-    # Sort by highest score first
     scored_chunks.sort(key=lambda x: x[0], reverse=True)
     return [c[1] for c in scored_chunks[:top_n]]
 
 # ==========================================
-# 4. SESSION INITIALIZATION
+# 4. INITIALIZATION
 # ==========================================
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Load the PDF content into memory only once
 if "pdf_data" not in st.session_state:
-    with st.spinner("Initializing Knowledge Base..."):
-        st.session_state.pdf_data = get_pdf_chunks(PDF_FILENAME)
+    st.session_state.pdf_data = get_pdf_chunks(PDF_FILENAME)
 
 # ==========================================
-# 5. SIDEBAR & STATUS
+# 5. SIDEBAR (Status Only - No Input)
 # ==========================================
 with st.sidebar:
-    st.header("HasMir Control Panel")
+    st.header("System Status")
     if os.path.exists(PDF_FILENAME):
-        st.success(f"✅ Knowledge Source: {PDF_FILENAME}")
+        st.success("✅ Manual Loaded")
     else:
-        st.error(f"❌ Missing: {PDF_FILENAME}")
+        st.error("❌ Manual Not Found")
     
-    if st.button("Clear Conversation"):
+    if st.button("Clear History"):
         st.session_state.messages = []
         st.rerun()
 
 # ==========================================
-# 6. CHAT INTERFACE & LOGIC
+# 6. CHAT LOGIC
 # ==========================================
-
-# Display previous messages
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-# User Input
-if prompt := st.chat_input("Ask a question about the Academic Policy..."):
-    # 1. Store User Message
+if prompt := st.chat_input("Ask a question about the policy..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.chat_message("user").write(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("HasMir's ChatBot is analyzing the manual..."):
+        with st.spinner("HasMir's ChatBot is analyzing..."):
             try:
-                # 2. RETRIEVAL (Get relevant chunks from PDF)
+                # Get Context
                 relevant_context = retrieve_context(prompt, st.session_state.pdf_data)
                 context_str = "\n\n".join(relevant_context)
                 
-                # 3. GENERATION (Send context + question to Groq)
+                # Call Groq Directly using the hardcoded key
                 client = Groq(api_key=GROQ_API_KEY)
                 
-                system_prompt = (
-                    "You are HasMir's ChatBot, a professional academic policy advisor. "
-                    "Instructions:\n"
-                    "1. Use the provided context from the student manual to answer.\n"
-                    "2. If the answer is not in the context, say: 'The manual does not provide information on this.'\n"
-                    "3. Keep answers clear and formatted with bullet points if needed.\n\n"
-                    f"CONTEXT FROM PDF:\n{context_str[:12000]}"
-                )
-
                 response = client.chat.completions.create(
                     messages=[
-                        {"role": "system", "content": system_prompt},
+                        {"role": "system", "content": f"You are HasMir's ChatBot. Use this context: {context_str[:10000]}"},
                         *st.session_state.messages
                     ],
                     model="llama-3.1-70b-versatile",
                 )
                 
-                # 4. Display & Store Assistant Response
                 answer = response.choices[0].message.content
                 st.write(answer)
                 st.session_state.messages.append({"role": "assistant", "content": answer})
                 
             except Exception as e:
-                st.error(f"System Error: {str(e)}")
+                st.error(f"Error: {str(e)}")
