@@ -1,88 +1,85 @@
 import streamlit as st
-import requests
-import io
+import pdfplumber
+import os
 import re
 from groq import Groq
-from pypdf import PdfReader
 
-# 1. PAGE CONFIGURATION & BRANDING
-st.set_page_config(
-    page_title="Mir MUHAMMAD Rafique & Co | Advisor", 
-    page_icon="📋",
-    layout="centered"
-)
+# 1. PAGE CONFIGURATION
+st.set_page_config(page_title="Mir MUHAMMAD Rafique' ChatBot", page_icon="🔮")
 
-# 2. PROFESSIONAL LIGHT THEME CSS (No Black Background)
+# 2. PURE BLACK THEME CSS
 st.markdown("""
     <style>
+    /* Main app background */
     .stApp {
-        background-color: #f8fafc !important;
-        color: #1e293b !important;
+        background-color: #000000 !important;
+        color: #ffffff !important;
     }
     
+    /* Sidebar background */
     [data-testid="stSidebar"] {
-        background-color: #ffffff !important;
-        border-right: 1px solid #e2e8f0;
+        background-color: #111111 !important;
     }
     
-    .developer-tag { 
-        text-align: center; 
-        color: #64748b; 
-        font-size: 14px; 
-        font-weight: 600;
-        padding: 20px;
+    /* Force white text for all elements */
+    h1, h2, h3, p, span, label, .stMarkdown {
+        color: #ffffff !important;
+    }
+    
+    /* Text input styling */
+    .stTextInput>div>div>input {
+        background-color: #222222 !important;
+        color: white !important;
+        border: 1px solid #444 !important;
     }
 
-    /* Fixed Footer */
-    .footer {
-        position: fixed;
-        left: 0;
-        bottom: 0;
-        width: 100%;
-        background-color: #ffffff;
-        color: #0f172a;
-        text-align: center;
-        padding: 10px;
-        font-weight: bold;
-        border-top: 1px solid #e2e8f0;
-        z-index: 100;
+    .developer-tag { 
+        text-align: right; 
+        color: #888888; 
+        font-size: 14px; 
+        margin-top: -20px; 
     }
+    
+    hr { border-top: 1px solid #333 !important; }
     </style>
-    <div class='footer'>Developed By Mir MUHAMMAD Rafique And Co</div>
     """, unsafe_allow_html=True)
 
-st.title("📋 Academic Policy Expert")
-st.write("Retrieving policy data directly from GitHub repository...")
+st.title("🔮 Mir MUHAMMAD Rafique's ChatBot")
+st.markdown("<div class='developer-tag'>Developed By Mir MR7</div>", unsafe_allow_html=True)
+st.write("### RAG Assistant: Academic Policy Expert")
 st.markdown("---")
 
-# 3. GITHUB DATA RETRIEVAL
-# Replace this with your actual RAW GitHub URL
-GITHUB_PDF_URL = "https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/Academic-Policy-Manual-for-Students2.pdf"
+# 3. SIDEBAR
+with st.sidebar:
+    st.header("Setup")
+    groq_key = st.text_input("Enter Groq API Key", type="password")
+    
+    st.subheader("Document Status")
+    manual_path = "Academic-Policy-Manual-for-Students2.pdf"
+    
+    if os.path.exists(manual_path):
+        st.success(f"✅ Document Active: {manual_path}")
+    else:
+        st.error(f"❌ Document Not Found: Please upload {manual_path} to your GitHub repository.")
 
-@st.cache_data
-def load_data_from_github(url):
+# 4. RAG ENGINE (Retrieval Logic)
+def get_chunks_from_pdf(path):
+    chunks = []
     try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            pdf_file = io.BytesIO(response.content)
-            reader = PdfReader(pdf_file)
-            chunks = []
-            for page in reader.pages:
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
                 text = page.extract_text()
                 if text:
-                    # Split by double newline for paragraph chunks
+                    # Chunks are created by paragraph (double newline)
                     paragraphs = text.split('\n\n')
                     chunks.extend(paragraphs)
-            return chunks
-        else:
-            st.error("Could not find the PDF on GitHub. Check your URL.")
-            return []
+        return chunks
     except Exception as e:
-        st.error(f"Error connecting to GitHub: {e}")
+        st.error(f"Error reading PDF: {e}")
         return []
 
-# 4. RAG ENGINE (Keyword Retrieval)
 def retrieve_relevant_chunks(query, chunks, top_n=5):
+    # Simple Keyword-based Retrieval (TF-IDF light)
     query_words = set(re.findall(r'\w+', query.lower()))
     scored_chunks = []
     for chunk in chunks:
@@ -98,50 +95,48 @@ def retrieve_relevant_chunks(query, chunks, top_n=5):
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Load chunks into memory
-if "pdf_chunks" not in st.session_state:
-    st.session_state.pdf_chunks = load_data_from_github(GITHUB_PDF_URL)
+# Load chunks into memory once to keep the bot fast
+if "pdf_chunks" not in st.session_state and os.path.exists(manual_path):
+    st.session_state.pdf_chunks = get_chunks_from_pdf(manual_path)
 
 # Display Chat History
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+    st.chat_message(msg["role"]).write(msg["content"])
 
 # 6. CHAT INTERACTION
 if prompt := st.chat_input("Ask a question about the policy..."):
-    # Add user message
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    if not groq_key:
+        st.error("Please provide your Groq API Key in the sidebar.")
+    else:
+        # User message
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.chat_message("user").write(prompt)
 
-    with st.chat_message("assistant"):
-        with st.spinner("Analyzing manual..."):
-            try:
-                # Retrieve Context
-                context_chunks = retrieve_relevant_chunks(prompt, st.session_state.pdf_chunks)
-                context_text = "\n\n".join(context_chunks)
-                
-                # Groq API Call
-                client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-                system_instructions = (
-                    "You are a professional academic policy advisor for Mir MUHAMMAD Rafique And Co. "
-                    "Use the following context from the manual to answer the user accurately. "
-                    "If the answer isn't in the manual, say so politely.\n\n"
-                    f"CONTEXT:\n{context_text[:10000]}"
-                )
+        with st.chat_message("assistant"):
+            with st.spinner("HasMir's ChatBot is searching the manual..."):
+                try:
+                    # STEP 1: RETRIEVAL
+                    context_chunks = retrieve_relevant_chunks(prompt, st.session_state.get("pdf_chunks", []))
+                    context_text = "\n\n".join(context_chunks)
+                    
+                    # STEP 2: GENERATION (Groq)
+                    client = Groq(api_key=groq_key)
+                    system_instructions = (
+                        "You are HasMir's ChatBot, a professional academic policy advisor. "
+                        "Use the provided context from the Academic Policy Manual to answer. "
+                        "If the answer is not in the context, clearly state that the manual "
+                        "does not contain that information.\n\n"
+                        f"CONTEXT FROM MANUAL:\n{context_text[:12000]}"
+                    )
 
-                response = client.chat.completions.create(
-                    messages=[
-                        {"role": "system", "content": system_instructions},
-                        *st.session_state.messages
-                    ],
-                    model="llama-3.1-70b-versatile",
-                    stream=True
-                )
-                
-                # Stream the response for a professional feel
-                full_response = st.write_stream(response)
-                st.session_state.messages.append({"role": "assistant", "content": full_response})
-                
-            except Exception as e:
-                st.error(f"System Error: {str(e)}")
+                    response = client.chat.completions.create(
+                        messages=[{"role": "system", "content": system_instructions}, *st.session_state.messages],
+                        model="llama-3.1-70b-versatile",
+                    )
+                    
+                    answer = response.choices[0].message.content
+                    st.write(answer)
+                    st.session_state.messages.append({"role": "assistant", "content": answer})
+                    
+                except Exception as e:
+                    st.error(f"Execution Error: {str(e)}")
