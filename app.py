@@ -122,7 +122,7 @@ if prompt := st.chat_input("Ask a question about the policy..."):
                     # STEP 2: GENERATION (Groq)
                     client = Groq(api_key=groq_key)
                     system_instructions = (
-                        "You are HasMir's ChatBot, a professional academic policy advisor. "
+                        "You are Mir's ChatBot, a professional academic policy advisor. "
                         "Use the provided context from the Academic Policy Manual to answer. "
                         "If the answer is not in the context, clearly state that the manual "
                         "does not contain that information.\n\n"
