@@ -1,162 +1,117 @@
 import streamlit as st
-import pdfplumber
-import requests
-import datetime
+from pypdf import PdfReader
+from openai import OpenAI
 
-# -------------------- BASIC SETUP --------------------
-st.set_page_config(page_title="Sufiyans chatBot", layout="centered")
+# 1. UI CONFIGURATION
+st.set_page_config(page_title="Sufiyan's ChatBot", page_icon="🤖")
 
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-PDF_PATH = "data/Sufiyan_Chatbot_Company_Manual.pdf"
-MODEL_NAME = "llama-3.1-8b-instant"
-
-
-# -------------------- LOAD + CHUNK PDF --------------------
-@st.cache_data
-def load_chunks(max_chars: int = 600):
-    text = ""
-    with pdfplumber.open(PDF_PATH) as pdf:
-        for page in pdf.pages:
-            tx = page.extract_text()
-            if tx:
-                text += tx + "\n"
-
-    raw_parts = [p.strip() for p in text.split("\n") if p.strip()]
-    chunks = []
-    buf = ""
-
-    for part in raw_parts:
-        if len(buf) + len(part) <= max_chars:
-            buf += " " + part
-        else:
-            chunks.append(buf.strip())
-            buf = part
-
-    if buf:
-        chunks.append(buf.strip())
-
-    return chunks
-
-
-pdf_chunks = load_chunks()
-
-
-# -------------------- SIMPLE RETRIEVAL --------------------
-def retrieve_context(query: str, top_k: int = 3):
-    q_words = set(query.lower().split())
-    scored = []
-
-    for ch in pdf_chunks:
-        ch_words = set(ch.lower().split())
-        score = len(q_words & ch_words)
-        if score > 0:
-            scored.append((score, ch))
-
-    if not scored:
-        return ""
-
-    scored.sort(reverse=True, key=lambda x: x[0])
-    return "\n\n".join([c for _, c in scored[:top_k]])
-
-
-# -------------------- GROQ API CALL --------------------
-def llama_chat(messages):
-    url = "https://api.groq.com/openai/v1/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json",
+# 2. CUSTOM CSS FOR BLACK THEME
+st.markdown("""
+    <style>
+    /* Main background */
+    .stApp {
+        background-color: #000000 !important;
+        color: #ffffff;
     }
-
-    payload = {
-        "model": MODEL_NAME,
-        "messages": messages,
-        "temperature": 0.4,
-    }
-
-    response = requests.post(url, json=payload, headers=headers)
-    result = response.json()
-
-    try:
-        return result["choices"][0]["message"]["content"]
-    except:
-        return "⚠️ Groq API Error:\n" + str(result)
-
-
-# -------------------- RAG + UPDATED INFO (NO SEARCHING TEXT) --------------------
-def get_answer(question: str, history):
-    context = retrieve_context(question)
-    today = datetime.datetime.now().strftime("%d %B %Y (%Y)")
-    pdf_strength = len(context.strip())
-
-    if pdf_strength < 50:
-        # PDF does not contain relevant information → use AI updated knowledge
-        system_prompt = f"""
-You are Sufiyans chatBot.
-
-Rules:
-- Give clear and direct answers.
-- Use your updated general knowledge (today = {today}).
-- Do NOT say anything about "searching", "checking", "researching", or "not knowing".
-- Never restrict information to the year 2023.
-"""
-    else:
-        # PDF has useful context → use it first, but allow updated info too
-        system_prompt = f"""
-You are Sufiyans chatBot.
-
-Use the following PDF text as your main reference. 
-If updated information (today = {today}) is needed, include it naturally.
-
-PDF Context:
----------------------
-{context}
----------------------
-
-Rules:
-- Provide confident and direct answers.
-- Do NOT say "I am searching" or "I am researching".
-- Never limit your knowledge to only 2023.
-"""
-
-    # Build message list
-    messages = [{"role": "system", "content": system_prompt}]
     
-    for m in history[-6:]:
-        messages.append(m)
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {
+        background-color: #111111 !important;
+    }
+    
+    /* Force white text on headers and labels */
+    h1, h2, h3, p, span, label, .stMarkdown {
+        color: #ffffff !important;
+    }
+    
+    /* Input field styling */
+    .stTextInput>div>div>input {
+        background-color: #222222 !important;
+        color: white !important;
+        border: 1px solid #444 !important;
+    }
 
-    messages.append({"role": "user", "content": question})
+    .developer-tag { 
+        text-align: right; 
+        color: #888888; 
+        font-size: 14px; 
+        margin-top: -20px; 
+    }
+    
+    hr { border-top: 1px solid #333 !important; }
+    </style>
+    """, unsafe_allow_html=True)
 
-    return llama_chat(messages)
+st.title("🤖 Sufiyan's ChatBot")
+st.markdown("<div class='developer-tag'>Developed By Sufiyan</div>", unsafe_allow_html=True)
+st.markdown("---")
 
+# 3. SIDEBAR SETTINGS
+with st.sidebar:
+    st.header("Settings")
+    api_key = st.text_input("Enter OpenAI API Key", type="password")
+    
+    st.subheader("Your Documents")
+    uploaded_pdfs = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
+    
+    if st.button("Clear Chat"):
+        st.session_state.messages = []
+        st.rerun()
 
-# -------------------- STREAMLIT UI --------------------
-st.title("🤖 Sufiyans chatBot")
+# 4. HELPER FUNCTION (PDF Text Extraction)
+def get_pdf_text(pdfs):
+    text = ""
+    for pdf in pdfs:
+        reader = PdfReader(pdf)
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+    return text
 
+# 5. CHAT LOGIC
 if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant",
-         "content": "Assalam o Alaikum! 👋 Main Sufiyans chatBot hoon. "
-                    "Jo Bhi Phouchna Bindaas Phoucho Mai Ho Na Apki Madad Kay Liye"}
-    ]
+    st.session_state.messages = []
 
-# Display chat messages
+# Display conversation history
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+    st.chat_message(msg["role"]).write(msg["content"])
 
-# User input
-user_input = st.chat_input("Apna sawal likho...")
+# Handle User Input
+if prompt := st.chat_input("Ask Sufiyan's ChatBot a question..."):
+    if not api_key:
+        st.error("Please provide an API Key in the sidebar.")
+    else:
+        # Initialize OpenAI Client
+        client = OpenAI(api_key=api_key)
+        
+        # Add user message to history
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.chat_message("user").write(prompt)
 
-if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
+        with st.chat_message("assistant"):
+            with st.spinner("Sufiyan's ChatBot is reading..."):
+                try:
+                    # Context building
+                    context = ""
+                    if uploaded_pdfs:
+                        context = get_pdf_text(uploaded_pdfs)
+                    
+                    # Construct messages for OpenAI
+                    messages_for_api = [
+                        {"role": "system", "content": f"You are Sufiyan's ChatBot. Use the following context to answer if possible: {context[:15000]}"},
+                    ]
+                    # Add history
+                    for m in st.session_state.messages:
+                        messages_for_api.append(m)
 
-    with st.chat_message("user"):
-        st.markdown(user_input)
-
-    with st.chat_message("assistant"):
-        with st.spinner("Soch raha hoon..."):
-            answer = get_answer(user_input, st.session_state.messages)
-        st.markdown(answer)
-
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+                    # API Call
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=messages_for_api
+                    )
+                    
+                    full_res = response.choices[0].message.content
+                    st.write(full_res)
+                    st.session_state.messages.append({"role": "assistant", "content": full_res})
+                    
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
