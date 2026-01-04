@@ -1,10 +1,11 @@
 import streamlit as st
 import pdfplumber
+import os
 from groq import Groq
 from tavily import TavilyClient
 
 # 1. PAGE CONFIGURATION
-st.set_page_config(page_title="Sufiyan's ChatBot", page_icon="🤖")
+st.set_page_config(page_title="Sufiyan's ChatBot", page_icon="🎓")
 
 # 2. PURE BLACK THEME CSS
 st.markdown("""
@@ -34,81 +35,84 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🤖 Sufiyan's ChatBot")
+st.title("🎓 Sufiyan's ChatBot")
 st.markdown("<div class='developer-tag'>Developed By Sufiyan</div>", unsafe_allow_html=True)
+st.write("Specializing in: *Academic Policy Manual for Students*")
 st.markdown("---")
 
 # 3. SIDEBAR
 with st.sidebar:
-    st.header("Settings")
-    groq_api_key = st.text_input("Enter Groq API Key", type="password")
-    tavily_api_key = st.text_input("Enter Tavily API Key (Optional)", type="password")
+    st.header("Setup")
+    groq_key = st.text_input("Enter Groq API Key", type="password")
+    tavily_key = st.text_input("Enter Tavily API Key (Optional)", type="password")
     
-    st.subheader("Your Documents")
-    uploaded_pdfs = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
+    st.subheader("Document Status")
+    manual_path = "Academic-Policy-Manual-for-Students2.pdf"
     
-    if st.button("Clear Chat"):
-        st.session_state.messages = []
-        st.rerun()
+    if os.path.exists(manual_path):
+        st.success(f"✅ Found: {manual_path}")
+    else:
+        st.error(f"❌ Missing: {manual_path}. Please ensure it's in your GitHub root folder.")
 
-# 4. HELPER FUNCTION: PDF EXTRACTION (pdfplumber)
-def extract_text_from_pdf(pdfs):
+# 4. HELPER FUNCTION: PDF EXTRACTION
+@st.cache_data
+def load_manual_content(path):
     full_text = ""
-    for pdf in pdfs:
-        with pdfplumber.open(pdf) as pdf_doc:
-            for page in pdf_doc.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    full_text += page_text + "\n"
-    return full_text
+    try:
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    full_text += text + "\n"
+        return full_text
+    except Exception as e:
+        return f"Error reading PDF: {e}"
 
 # 5. CHAT INITIALIZATION
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display History
+# Display conversation
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-# 6. USER INPUT & AI LOGIC
-if prompt := st.chat_input("Ask Sufiyan's ChatBot..."):
-    if not groq_api_key:
-        st.error("Please provide a Groq API Key in the sidebar.")
+# 6. CHAT LOGIC
+if prompt := st.chat_input("Ask about the Academic Policy..."):
+    if not groq_key:
+        st.error("Please enter your Groq API Key in the sidebar.")
     else:
-        # Add user message
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.chat_message("user").write(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Sufiyan's ChatBot is analyzing..."):
+            with st.spinner("Sufiyan's ChatBot is analyzing the manual..."):
                 try:
-                    # Initialize Groq Client
-                    client = Groq(api_key=groq_api_key)
+                    # 1. Load context from the specific file
+                    manual_content = load_manual_content(manual_path)
                     
-                    # Get PDF Context
-                    context = ""
-                    if uploaded_pdfs:
-                        context = extract_text_from_pdf(uploaded_pdfs)
+                    # 2. Initialize Groq
+                    client = Groq(api_key=groq_key)
                     
-                    # Build System Prompt
-                    system_message = f"You are Sufiyan's ChatBot. "
-                    if context:
-                        system_message += f"Use this PDF content to answer: {context[:15000]}"
-                    else:
-                        system_message += "Answer the user's questions clearly."
+                    # 3. Build the prompt (Limiting context to stay within token limits)
+                    system_prompt = (
+                        "You are Sufiyan's ChatBot, an expert on student academic policies. "
+                        "Use the following manual content to answer the user accurately. "
+                        "If the answer is not in the manual, state that you don't know based on the document.\n\n"
+                        f"MANUAL CONTEXT:\n{manual_content[:12000]}"
+                    )
 
-                    # API Call
-                    response = client.chat.completions.create(
-                        model="llama-3.1-70b-versatile",
+                    # 4. Call Groq
+                    chat_completion = client.chat.completions.create(
                         messages=[
-                            {"role": "system", "content": system_message},
+                            {"role": "system", "content": system_prompt},
                             *st.session_state.messages
-                        ]
+                        ],
+                        model="llama-3.1-70b-versatile",
                     )
                     
-                    answer = response.choices[0].message.content
-                    st.write(answer)
-                    st.session_state.messages.append({"role": "assistant", "content": answer})
+                    response = chat_completion.choices[0].message.content
+                    st.write(response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
                     
                 except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    st.error(f"An error occurred: {str(e)}")
