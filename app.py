@@ -5,9 +5,9 @@ import re
 from groq import Groq
 
 # 1. PAGE CONFIGURATION
-st.set_page_config(page_title="MiRAG | Academic Advisor", page_icon="🤖")
+st.set_page_config(page_title="HasMir's ChatBot", page_icon="🔮")
 
-# 2. PURE BLACK THEME CSS (Polished)
+# 2. PURE BLACK THEME CSS
 st.markdown("""
     <style>
     /* Main app background */
@@ -21,16 +21,16 @@ st.markdown("""
         background-color: #111111 !important;
     }
     
-    /* White text for visibility on black */
+    /* Force white text for all elements */
     h1, h2, h3, p, span, label, .stMarkdown {
         color: #ffffff !important;
     }
     
-    /* Chat message area styling */
-    .stChatMessage {
-        background-color: #111111 !important;
-        border-radius: 10px;
-        margin-bottom: 10px;
+    /* Text input styling */
+    .stTextInput>div>div>input {
+        background-color: #222222 !important;
+        color: white !important;
+        border: 1px solid #444 !important;
     }
 
     .developer-tag { 
@@ -44,19 +44,26 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🤖 MiRAG")
-st.markdown("<div class='developer-tag'>Developed By Mir MUHAMMAD Rafique And Co</div>", unsafe_allow_html=True)
-st.write("### Academic Policy Expert")
+st.title("🔮 HasMir's ChatBot")
+st.markdown("<div class='developer-tag'>Developed By HasMir</div>", unsafe_allow_html=True)
+st.write("### RAG Assistant: Academic Policy Expert")
 st.markdown("---")
 
-# 3. PDF CONFIGURATION
-MANUAL_PATH = "Academic-Policy-Manual-for-Students2.pdf"
+# 3. SIDEBAR
+with st.sidebar:
+    st.header("Setup")
+    groq_key = st.text_input("Enter Groq API Key", type="password")
+    
+    st.subheader("Document Status")
+    manual_path = "Academic-Policy-Manual-for-Students2.pdf"
+    
+    if os.path.exists(manual_path):
+        st.success(f"✅ Document Active: {manual_path}")
+    else:
+        st.error(f"❌ Document Not Found: Please upload {manual_path} to your GitHub repository.")
 
-# 4. RAG ENGINE (Optimized)
-@st.cache_resource
+# 4. RAG ENGINE (Retrieval Logic)
 def get_chunks_from_pdf(path):
-    if not os.path.exists(path):
-        return None
     chunks = []
     try:
         with pdfplumber.open(path) as pdf:
@@ -65,16 +72,14 @@ def get_chunks_from_pdf(path):
                 if text:
                     # Chunks are created by paragraph (double newline)
                     paragraphs = text.split('\n\n')
-                    chunks.extend([p.strip() for p in paragraphs if p.strip()])
+                    chunks.extend(paragraphs)
         return chunks
     except Exception as e:
         st.error(f"Error reading PDF: {e}")
         return []
 
 def retrieve_relevant_chunks(query, chunks, top_n=5):
-    if not chunks:
-        return ""
-    # Simple Keyword-based Retrieval
+    # Simple Keyword-based Retrieval (TF-IDF light)
     query_words = set(re.findall(r'\w+', query.lower()))
     scored_chunks = []
     for chunk in chunks:
@@ -84,70 +89,54 @@ def retrieve_relevant_chunks(query, chunks, top_n=5):
             scored_chunks.append((score, chunk))
     
     scored_chunks.sort(key=lambda x: x[0], reverse=True)
-    return "\n\n".join([c[1] for c in scored_chunks[:top_n]])
+    return [c[1] for c in scored_chunks[:top_n]]
 
 # 5. INITIALIZATION
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Load chunks into memory once
-if "pdf_chunks" not in st.session_state:
-    with st.spinner("Loading Knowledge Base..."):
-        st.session_state.pdf_chunks = get_chunks_from_pdf(MANUAL_PATH)
-
-# Check if file exists
-if st.session_state.pdf_chunks is None:
-    st.error(f"❌ File Not Found: Please ensure '{MANUAL_PATH}' is in your GitHub repository.")
-    st.stop()
+# Load chunks into memory once to keep the bot fast
+if "pdf_chunks" not in st.session_state and os.path.exists(manual_path):
+    st.session_state.pdf_chunks = get_chunks_from_pdf(manual_path)
 
 # Display Chat History
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+    st.chat_message(msg["role"]).write(msg["content"])
 
 # 6. CHAT INTERACTION
 if prompt := st.chat_input("Ask a question about the policy..."):
-    # Securely get API Key from Secrets
-    try:
-        api_key = st.secrets["GROQ_API_KEY"]
-    except KeyError:
-        st.error("API Key Missing: Please add GROQ_API_KEY to your Streamlit App Secrets.")
-        st.stop()
+    if not groq_key:
+        st.error("Please provide your Groq API Key in the sidebar.")
+    else:
+        # User message
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.chat_message("user").write(prompt)
 
-    # User message
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+        with st.chat_message("assistant"):
+            with st.spinner("HasMir's ChatBot is searching the manual..."):
+                try:
+                    # STEP 1: RETRIEVAL
+                    context_chunks = retrieve_relevant_chunks(prompt, st.session_state.get("pdf_chunks", []))
+                    context_text = "\n\n".join(context_chunks)
+                    
+                    # STEP 2: GENERATION (Groq)
+                    client = Groq(api_key=groq_key)
+                    system_instructions = (
+                        "You are HasMir's ChatBot, a professional academic policy advisor. "
+                        "Use the provided context from the Academic Policy Manual to answer. "
+                        "If the answer is not in the context, clearly state that the manual "
+                        "does not contain that information.\n\n"
+                        f"CONTEXT FROM MANUAL:\n{context_text[:12000]}"
+                    )
 
-    # Assistant message
-    with st.chat_message("assistant"):
-        try:
-            # STEP 1: RETRIEVAL
-            context_text = retrieve_relevant_chunks(prompt, st.session_state.pdf_chunks)
-            
-            # STEP 2: GENERATION (Groq)
-            client = Groq(api_key=api_key)
-            system_instructions = (
-                "You are MiRAG, the official AI Advisor for Mir MUHAMMAD Rafique And Co. "
-                "Use the provided context from the Academic Policy Manual to answer. "
-                "If the information is not in the context, inform the user politely and "
-                "suggest they contact the Registrar's office.\n\n"
-                f"CONTEXT FROM MANUAL:\n{context_text[:12000]}"
-            )
-
-            # Creating a stream for better UI
-            stream = client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": system_instructions},
-                    *st.session_state.messages
-                ],
-                model="llama-3.1-70b-versatile",
-                stream=True,
-            )
-            
-            # Streaming the response to the UI
-            full_response = st.write_stream(stream)
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
-            
-        except Exception as e:
-            st.error(f"Connection Error: {str(e)}")
+                    response = client.chat.completions.create(
+                        messages=[{"role": "system", "content": system_instructions}, *st.session_state.messages],
+                        model="llama-3.1-70b-versatile",
+                    )
+                    
+                    answer = response.choices[0].message.content
+                    st.write(answer)
+                    st.session_state.messages.append({"role": "assistant", "content": answer})
+                    
+                except Exception as e:
+                    st.error(f"Execution Error: {str(e)}")
